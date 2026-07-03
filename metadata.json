@@ -1,0 +1,12 @@
+{
+  "name": "بطاقة الشام الرقمية - ChamCard PRO",
+  "description": "نظام مؤسساتي متكامل للمواصلات، يدعم التشفير المتقدم والعمل دون اتصال بالإنترنت والمزامنة الذكية.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

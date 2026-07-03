@@ -1,0 +1,76 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User account details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "phone": { "type": "string" },
+        "is_verified": { "type": "boolean" },
+        "theme": { "type": "string" }
+      },
+      "required": ["id", "phone"]
+    },
+    "Card": {
+      "title": "Card",
+      "description": "User payment card",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "number": { "type": "string" },
+        "balance": { "type": "number" },
+        "type": { "type": "string" },
+        "status": { "type": "string" },
+        "is_primary": { "type": "boolean" }
+      },
+      "required": ["id", "userId", "number"]
+    },
+    "Bus": {
+      "title": "Bus",
+      "description": "Public transportation bus",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "route_code": { "type": "string" },
+        "route_name": { "type": "string" },
+        "ticket_price": { "type": "number" },
+        "location": { "type": "object", "properties": { "lat": { "type": "number" }, "lng": { "type": "number" } } }
+      },
+      "required": ["id", "route_code"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Transaction record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "type": { "type": "string" },
+        "amount": { "type": "number" },
+        "timestamp": { "type": "number" },
+        "details": { "type": "string" }
+      },
+      "required": ["id", "userId", "type", "amount", "timestamp"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "cards/{cardId}": {
+      "schema": "Card",
+      "description": "User cards"
+    },
+    "buses/{busId}": {
+      "schema": "Bus",
+      "description": "Bus data"
+    },
+    "transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Transaction logs"
+    }
+  }
+}

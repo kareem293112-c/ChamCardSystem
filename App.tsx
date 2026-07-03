@@ -1,0 +1,1759 @@
+
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { 
+  Home, CreditCard, MapPin, User, QrCode, MessageCircle, 
+  ArrowLeft, Wallet, Send, RefreshCw, CheckCircle2, QrCode as QrIcon,
+  Search, Smartphone, Wifi, CreditCard as CardIcon, ShieldCheck,
+  Zap, Camera, CameraOff, Loader2, Info, Copy, Share2, Image as ImageIcon,
+  CheckCircle, XCircle, Clock, ChevronLeft, Tag, Trash, Plus, Gift
+} from 'lucide-react';
+import { View, Card, AuthSession, AppAction, SystemState, RechargeRequest, Transaction } from './types';
+import { authStore } from './store/authStore';
+import { rechargeService } from './services/rechargeService';
+
+import BalanceCard from './components/BalanceCard';
+import QuickActions from './components/QuickActions';
+import CardList from './components/CardList';
+
+import TransportMap from './components/TransportMap';
+import Profile from './components/Profile';
+import Toast from './components/Toast';
+import Auth from './components/Auth';
+import CardInspector from './components/CardInspector';
+import SecurityCenter from './components/SecurityCenter';
+import AddCardModal from './components/AddCardModal';
+import TransactionsHistory from './components/TransactionsHistory';
+import { NfcSyncModal } from './components/NfcSyncModal';
+import { DriverDashboard } from './components/DriverDashboard';
+
+// الصورة الأصلية التي قدمها المستخدم (الباركود مع الشعار مدمجين)
+const ORIGINAL_QR_IMAGE = "https://images2.imgbox.com/6c/f5/lYn1Qe4c_o.png";
+
+const App: React.FC = () => {
+  const [session, setSession] = useState<AuthSession | null>(() => authStore.getSession());
+  const [activeView, setActiveView] = useState<View>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const v = params.get('view');
+      if (v === 'qr_payment' || v === 'qr') {
+        return 'qr_payment';
+      }
+    } catch (e) {
+      console.warn("Error reading URL params", e);
+    }
+    return 'home';
+  });
+  const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+  const [selectedRoute, setSelectedRoute] = useState<{ from: string, to: string } | null>(null);
+  const [syncCard, setSyncCard] = useState<Card | null>(null);
+  
+  // Recharge Flow States
+  const [topupStep, setTopupStep] = useState<'info' | 'upload' | 'confirm'>('info');
+  const [rechargeAmount, setRechargeAmount] = useState('5000');
+  const [receiptImg, setReceiptImg] = useState<string | null>(null);
+
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    const saved = localStorage.getItem('theme');
+    return saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  });
+
+  const [system, setSystem] = useState<SystemState>({
+    isBusy: false,
+    busyAction: null,
+    nfcStatus: 'IDLE',
+    isOnline: navigator.onLine
+  });
+
+  useEffect(() => {
+    const root = window.document.documentElement;
+    root.classList.toggle('dark', isDarkMode);
+    localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
+  }, [isDarkMode]);
+
+  const [showInspector, setShowInspector] = useState(false);
+  const [showAddCard, setShowAddCard] = useState(false);
+
+  // Offers & Admin-Offers State Variables
+  const [offers, setOffers] = useState<any[]>([]);
+  const [loadingOffers, setLoadingOffers] = useState(false);
+  const [adminTab, setAdminTab] = useState<'requests' | 'offers'>('requests');
+
+  // Form states for new offer
+  const [newOfferTitle, setNewOfferTitle] = useState('');
+  const [newOfferDesc, setNewOfferDesc] = useState('');
+  const [newOfferDiscount, setNewOfferDiscount] = useState('');
+  const [newOfferCode, setNewOfferCode] = useState('');
+  const [newOfferExpiry, setNewOfferExpiry] = useState('');
+  const [isSubmittingOffer, setIsSubmittingOffer] = useState(false);
+
+  const handleSaveRoute = useCallback((from: string, to: string) => {
+    const saved = localStorage.getItem('user_routes');
+    const list = saved ? JSON.parse(saved) : [];
+    const exists = list.some((r: any) => r.from === from && r.to === to);
+    if (!exists) {
+      const newRoute = {
+        id: Math.random().toString(36).substr(2, 9),
+        from,
+        to,
+        icon: 'MapPin'
+      };
+      list.push(newRoute);
+      localStorage.setItem('user_routes', JSON.stringify(list));
+      triggerToast('تم حفظ المسار في حسابك', 'success');
+    }
+  }, []);
+
+  const handleIsRouteSaved = useCallback((from: string, to: string) => {
+    const saved = localStorage.getItem('user_routes');
+    const list = saved ? JSON.parse(saved) : [];
+    return list.some((r: any) => r.from === from && r.to === to);
+  }, []);
+
+  const handleSelectRoute = useCallback((route: { from: string, to: string }) => {
+    setSelectedRoute(route);
+    setActiveView('transport');
+  }, []);
+
+  const [transactions, setTransactions] = useState<Transaction[]>(() => {
+    const saved = localStorage.getItem('user_transactions');
+    return saved ? JSON.parse(saved) : [
+      {
+        id: 't1',
+        cardId: '1',
+        cardName: 'بطاقتي الشخصية',
+        type: 'recharge',
+        title: 'شحن رصيد - شام كاش',
+        subtitle: 'طلب شحن إثبات دفع مقبول',
+        amount: 25000,
+        timestamp: Date.now() - 3600000 * 2
+      },
+      {
+        id: 't2',
+        cardId: '1',
+        cardName: 'بطاقتي الشخصية',
+        type: 'pay',
+        title: 'باص البرامكة - خط 2',
+        subtitle: 'تسجيل دخول الحافلة (QR)',
+        amount: -1000,
+        timestamp: Date.now() - 3600000 * 24
+      },
+      {
+        id: 't3',
+        cardId: '1',
+        cardName: 'بطاقتي الشخصية',
+        type: 'pay',
+        title: 'باص كراجات السيدة زينب',
+        subtitle: 'خط الكراجات الجنوبي',
+        amount: -1500,
+        timestamp: Date.now() - 3600000 * 24 * 3
+      },
+      {
+        id: 't4',
+        cardId: '1',
+        cardName: 'بطاقتي الشخصية',
+        type: 'transfer',
+        title: 'تحويل صادر إلى ريم',
+        subtitle: 'حوالة فورية رقمية',
+        amount: -10000,
+        timestamp: Date.now() - 3600000 * 24 * 7
+      },
+      {
+        id: 't5',
+        cardId: '1',
+        cardName: 'بطاقتي الشخصية',
+        type: 'recharge',
+        title: 'شحن رصيد من وكيل سيرتيل',
+        subtitle: 'تعبئة فورية مركزية',
+        amount: 50000,
+        timestamp: Date.now() - 3600000 * 24 * 10
+      },
+      {
+        id: 't6',
+        cardId: '1',
+        cardName: 'بطاقتي الشخصية',
+        type: 'pay',
+        title: 'ميكرو سرفيس المزة جبل',
+        subtitle: 'دفع أجرة مقعدين',
+        amount: -1000,
+        timestamp: Date.now() - 3600000 * 24 * 15
+      },
+      {
+        id: 't7',
+        cardId: '1',
+        cardName: 'بطاقتي الشخصية',
+        type: 'pay',
+        title: 'مكتبة باب توما الجامعية',
+        subtitle: 'شراء ملخصات وكتب الطبعة',
+        amount: -6000,
+        timestamp: Date.now() - 3600000 * 24 * 32
+      },
+      {
+        id: 't8',
+        cardId: '1',
+        cardName: 'بطاقتي الشخصية',
+        type: 'transfer',
+        title: 'تحويل وارد من أحمد سليمان',
+        subtitle: 'رقم مرجعي TX9213',
+        amount: 15000,
+        timestamp: Date.now() - 3600000 * 24 * 50
+      },
+      {
+        id: 't9',
+        cardId: '1',
+        cardName: 'بطاقتي الشخصية',
+        type: 'pay',
+        title: 'قطار المشاة - المزة/الربوة',
+        subtitle: 'تذكرة رحلة ذهاب وإياب سياحية',
+        amount: -3000,
+        timestamp: Date.now() - 3600000 * 24 * 72
+      },
+      {
+        id: 't10',
+        cardId: '1',
+        cardName: 'بطاقتي الشخصية',
+        type: 'recharge',
+        title: 'رصيد إفتتاح المحفظة أول مرة',
+        subtitle: 'شحن إيداع نقدي رسمي',
+        amount: 100000,
+        timestamp: Date.now() - 3600000 * 24 * 85
+      }
+    ];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('user_transactions', JSON.stringify(transactions));
+  }, [transactions]);
+
+  const [cards, setCards] = useState<Card[]>(() => {
+    const saved = localStorage.getItem('user_cards');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.slice(0, 1);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return [
+      { 
+        id: '1', 
+        alias: 'بطاقتي الشخصية', 
+        cardNumber: '9630 1122 3344 8822', 
+        balance: 45200, 
+        type: 'digital',
+        themeColor: 'emerald'
+      }
+    ];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('user_cards', JSON.stringify(cards));
+  }, [cards]);
+
+  const loadDashboard = useCallback(() => {
+    if (!session?.token) return;
+    fetch('/api/dashboard', {
+      headers: {
+        'Authorization': `Bearer ${session.token}`
+      }
+    })
+    .then(res => {
+      if (res.ok) return res.json();
+      if (res.status === 401 || res.status === 404) {
+        authStore.clearSession();
+        setSession(null);
+        return null;
+      }
+      throw new Error("Failed to load dashboard data");
+    })
+    .then(data => {
+      if (!data) return;
+      if (data.cards && data.cards.length > 0) {
+        setCards(data.cards);
+      }
+      if (data.transactions) {
+        setTransactions(data.transactions);
+      }
+      if (data.user) {
+        setSession(prev => prev ? { ...prev, user: { ...prev.user, ...data.user } } : null);
+      }
+    })
+    .catch(err => {
+      console.error("Error fetching dashboard:", err);
+    });
+  }, [session?.token]);
+
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
+  const fetchOffers = useCallback(() => {
+    setLoadingOffers(true);
+    fetch('/api/offers')
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          setOffers(data);
+        }
+        setLoadingOffers(false);
+      })
+      .catch(err => {
+        console.error("Error loading offers:", err);
+        setLoadingOffers(false);
+      });
+  }, []);
+
+  useEffect(() => {
+    fetchOffers();
+  }, [fetchOffers]);
+
+  useEffect(() => {
+    if (syncCard && showInspector) {
+      setShowInspector(false);
+    }
+  }, [syncCard, showInspector]);
+
+  const handleAddOffer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newOfferTitle || !newOfferDesc) {
+      triggerToast('يرجى ملء الحقول الأساسية', 'error');
+      return;
+    }
+    if (!session?.token) return;
+
+    setIsSubmittingOffer(true);
+    try {
+      const res = await fetch('/api/offers', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.token}`
+        },
+        body: JSON.stringify({
+          title: newOfferTitle,
+          description: newOfferDesc,
+          discount: newOfferDiscount,
+          code: newOfferCode,
+          expiryDate: newOfferExpiry
+        })
+      });
+      if (res.ok) {
+        triggerToast('تمت إضافة العرض بنجاح', 'success');
+        setNewOfferTitle('');
+        setNewOfferDesc('');
+        setNewOfferDiscount('');
+        setNewOfferCode('');
+        setNewOfferExpiry('');
+        fetchOffers();
+      } else {
+        const errData = await res.json();
+        triggerToast(errData.message || 'فشل إضافة العرض', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      triggerToast('حدث خطأ أثناء إضافة العرض', 'error');
+    } finally {
+      setIsSubmittingOffer(false);
+    }
+  };
+
+  const handleDeleteOffer = async (id: string) => {
+    if (!session?.token) return;
+    try {
+      const res = await fetch(`/api/offers/${id}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${session.token}`
+        }
+      });
+      if (res.ok) {
+        triggerToast('تم حذف العرض بنجاح', 'success');
+        fetchOffers();
+      } else {
+        triggerToast('فشل حذف العرض', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      triggerToast('حدث خطأ أثناء حذف العرض', 'error');
+    }
+  };
+
+  useEffect(() => {
+    const handleSync = () => {
+      const pending = JSON.parse(localStorage.getItem('pending_offline_trips') || '[]');
+      if (pending.length > 0 && session?.token && navigator.onLine) {
+        console.log("Online status detected. Syncing offline QR transactions...");
+        Promise.all(pending.map((trip: any) => {
+          return fetch('/api/trips/pay-qr', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${session.token}`
+            },
+            body: JSON.stringify({ cardId: trip.cardId, busId: 'bus_M1' })
+          });
+        }))
+        .then(() => {
+          localStorage.setItem('pending_offline_trips', '[]');
+          loadDashboard();
+          triggerToast('تمت مزامنة عمليات الدفع غير المتصلة بنجاح', 'success');
+        })
+        .catch(err => console.error("Error syncing offline transactions:", err));
+      }
+    };
+
+    window.addEventListener('online', handleSync);
+    if (navigator.onLine) {
+      handleSync();
+    }
+    return () => window.removeEventListener('online', handleSync);
+  }, [session?.token, loadDashboard]);
+
+  const handleApproveRecharge = useCallback((requestId: string, amount: number, userId: string) => {
+    rechargeService.updateStatus(requestId, 'approved');
+    if (session && session.user.phone === userId) {
+      setCards(prev => {
+        const updated = [...prev];
+        if (updated.length > 0) {
+          if (updated[0].type === 'physical') {
+            updated[0].pendingNfcAmount = (updated[0].pendingNfcAmount || 0) + amount;
+          } else {
+            updated[0].balance += amount;
+          }
+        }
+        return updated;
+      });
+      setTransactions(prev => [
+        {
+          id: 'tx_' + Math.random().toString(36).substr(2, 9),
+          cardId: cards[0]?.id || '1',
+          cardName: cards[0]?.alias || 'البطاقة الافتراضية',
+          type: 'recharge',
+          title: 'شحن رصيد مقبول',
+          subtitle: cards[0]?.type === 'physical' ? 'معلق بانتظار NFC' : 'تم شحن الرصيد مباشرة',
+          amount,
+          timestamp: Date.now()
+        },
+        ...prev
+      ]);
+      triggerToast(`تم قبول الشحن وإضافة ${amount.toLocaleString()} ل.س لرصيدك`, 'success');
+    } else {
+      triggerToast('تم قبول طلب الشحن وإعلام المشترك', 'success');
+    }
+  }, [session, cards]);
+
+  const triggerToast = (message: string, type: 'success' | 'error') => setToast({ message, type });
+
+  const dispatchAction = useCallback(async (action: AppAction) => {
+    if (system.isBusy) return;
+    switch (action) {
+      case 'PAY_QR': setActiveView('qr_payment'); break;
+      case 'INSPECT_NFC': 
+      case 'TOP_UP_NFC':
+        setShowInspector(true); 
+        setSystem(p => ({...p, nfcStatus: 'READY'})); 
+        break;
+      case 'TRIGGER_SCAN':
+        setSystem(p => ({...p, nfcStatus: 'SCANNING'}));
+        break;
+      case 'TRIGGER_WRITE':
+        setSystem(p => ({...p, nfcStatus: 'WRITING'}));
+        break;
+      case 'ADD_NEW_CARD':
+        setShowAddCard(true);
+        break;
+      case 'TOP_UP_BALANCE': setTopupStep('info'); setActiveView('topup'); break;
+      case 'TRANSFER_FUNDS': setActiveView('transfer'); break;
+      case 'NAVIGATE_HOME': setActiveView('home'); break;
+      case 'NAVIGATE_CARDS': setActiveView('cards'); break;
+      case 'NAVIGATE_TRANSPORT': setActiveView('transport'); break;
+      case 'NAVIGATE_PROFILE': setActiveView('profile'); break;
+      case 'NAVIGATE_ADMIN_REQUESTS': setActiveView('admin_requests'); break;
+      case 'GOTO_SECURITY': setActiveView('security'); break;
+      case 'PERFORM_LOGOUT': authStore.clearSession(); setSession(null); setActiveView('home'); break;
+    }
+  }, [system.isBusy]);
+
+  const ActionView = ({ title, subtitle, icon, children, onConfirm, confirmText = "تأكيد العملية", hideConfirm = false, onBack }: any) => (
+    <div className="p-8 animate-in slide-in-from-bottom duration-500 pt-16 flex flex-col min-h-screen">
+      <button onClick={onBack || (() => setActiveView('home'))} className="w-12 h-12 bg-white dark:bg-slate-800 rounded-2xl flex items-center justify-center shadow-sm mb-8"><ArrowLeft className="rotate-180 dark:text-white" /></button>
+      <div className="flex items-center gap-6 mb-12">
+        <div className="w-20 h-20 bg-emerald-600/10 text-emerald-600 rounded-[30px] flex items-center justify-center shrink-0">{icon}</div>
+        <div className="text-right">
+          <h2 className="text-3xl font-black dark:text-white leading-tight">{title}</h2>
+          <p className="text-slate-400 font-bold mt-1 text-sm">{subtitle}</p>
+        </div>
+      </div>
+      <div className="flex-1 space-y-8">{children}</div>
+      {!hideConfirm && (
+        <div className="mt-12 pb-10">
+          <button onClick={onConfirm} className="w-full bg-emerald-600 text-white font-black py-6 rounded-[32px] shadow-2xl active:scale-95 transition-all text-xl">{confirmText}</button>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderView = () => {
+    switch(activeView) {
+      case 'topup':
+        if (topupStep === 'info') {
+          return (
+            <div className="bg-[#121831] min-h-screen p-8 text-center animate-in fade-in flex flex-col pt-12" dir="rtl">
+               {/* Header */}
+               <div className="flex items-center justify-between mb-16">
+                  <div className="w-10"></div>
+                  <h2 className="text-2xl font-bold text-white tracking-wide">استقبال</h2>
+                  <button onClick={() => setActiveView('home')} className="text-white p-2">
+                    <ChevronLeft size={28} className="rotate-180" />
+                  </button>
+               </div>
+
+               {/* EXACT ORIGINAL IMAGE CONTAINER */}
+               <div className="relative mx-auto w-full max-w-[320px] mb-12 animate-in zoom-in duration-700">
+                  <div className="bg-white rounded-[40px] shadow-[0_25px_60px_rgba(0,0,0,0.6)] overflow-hidden flex flex-col items-center">
+                     {/* IMAGE AS PROVIDED BY THE USER - NO MODIFICATIONS */}
+                     <img 
+                       src={ORIGINAL_QR_IMAGE} 
+                       alt="ShamCash Official QR" 
+                       className="w-full h-auto object-contain"
+                     />
+                  </div>
+               </div>
+
+               {/* ID Text Section - Matches exactly with the visual reference */}
+               <div className="text-center space-y-1 mb-12 px-4">
+                  <p className="text-white text-[16px] font-medium break-all tracking-tight leading-none opacity-90">
+                    f165bd2f32805f90dc8f21ace8e86f6415
+                  </p>
+                  <p className="text-white text-[16px] font-medium opacity-90">6f6415</p>
+               </div>
+               
+               {/* Action Buttons */}
+               <div className="flex justify-center gap-16 mb-12">
+                  <button className="text-white hover:scale-110 active:scale-90 transition-all duration-300">
+                    <Share2 size={32} strokeWidth={2.5} />
+                  </button>
+                  <button 
+                    onClick={() => {
+                      navigator.clipboard.writeText("f165bd2f32805f90dc8f21ace8e86f64156f6415");
+                      triggerToast('تم نسخ المعرف بنجاح', 'success');
+                    }} 
+                    className="text-white hover:scale-110 active:scale-90 transition-all duration-300"
+                  >
+                    <Copy size={32} strokeWidth={2.5} />
+                  </button>
+               </div>
+
+               {/* Bottom Link Button */}
+               <div className="mt-auto pb-10 px-4">
+                  <button 
+                    onClick={() => setTopupStep('upload')}
+                    className="w-full bg-white/5 border border-white/10 text-white font-black py-6 rounded-[28px] text-lg active:scale-95 transition-all backdrop-blur-md shadow-2xl"
+                  >
+                    أرسلت المبلغ، ارفع الإشعار
+                  </button>
+               </div>
+            </div>
+          );
+        }
+
+        if (topupStep === 'upload') {
+          return (
+            <ActionView 
+              onBack={() => setTopupStep('info')}
+              title="إثبات الدفع" 
+              subtitle="يرجى إدخال المبلغ وصورة إشعار شام كاش" 
+              icon={<ImageIcon />} 
+              hideConfirm
+            >
+               <div className="space-y-6">
+                  <div className="bg-white dark:bg-slate-800 p-6 rounded-[32px] border-2 border-slate-100 dark:border-slate-700">
+                     <p className="text-[10px] font-black text-slate-400 mb-4 uppercase">المبلغ المرسل (ل.س)</p>
+                     <input 
+                       type="number" 
+                       value={rechargeAmount}
+                       onChange={e => setRechargeAmount(e.target.value)}
+                       className="w-full text-center text-4xl font-black bg-transparent outline-none dark:text-white"
+                     />
+                  </div>
+
+                  {!receiptImg ? (
+                    <button 
+                      onClick={() => setReceiptImg('https://picsum.photos/seed/sham_receipt/600/800')}
+                      className="w-full aspect-[4/3] bg-slate-100 dark:bg-slate-900 rounded-[40px] flex flex-col items-center justify-center gap-4 border-2 border-dashed border-slate-300 dark:border-slate-700"
+                    >
+                       <Camera size={48} className="text-slate-400" />
+                       <span className="text-sm font-black text-slate-500">رفع صورة إشعار الإرسال</span>
+                    </button>
+                  ) : (
+                    <div className="relative rounded-[40px] overflow-hidden border-4 border-white dark:border-slate-800 shadow-xl">
+                       <img src={receiptImg} className="w-full h-auto" />
+                       <button onClick={() => setReceiptImg(null)} className="absolute top-4 right-4 bg-red-600 text-white p-3 rounded-full"><XCircle size={24} /></button>
+                    </div>
+                  )}
+
+                  <button 
+                    disabled={!receiptImg}
+                    onClick={async () => {
+                      const ok = await rechargeService.submitRequest({
+                        userId: session?.user.phone || 'unknown',
+                        userName: session?.user.fullName || 'User',
+                        amount: parseInt(rechargeAmount),
+                        receiptImage: receiptImg || ''
+                      }, session?.token || '');
+                      if (ok) {
+                        setTopupStep('confirm');
+                      } else {
+                        triggerToast('فشل إرسال طلب الشحن. يرجى إعادة المحاولة.', 'error');
+                      }
+                    }}
+                    className="w-full bg-emerald-600 text-white font-black py-6 rounded-[32px] text-xl disabled:opacity-50 shadow-xl"
+                  >
+                    إرسال الطلب للإدارة
+                  </button>
+               </div>
+            </ActionView>
+          );
+        }
+
+        if (topupStep === 'confirm') {
+          return (
+            <div className="p-8 pt-24 text-center animate-in zoom-in duration-500 flex flex-col min-h-screen">
+               <div className="w-32 h-32 bg-amber-500 rounded-[48px] flex items-center justify-center mx-auto mb-10 shadow-2xl relative">
+                  <div className="absolute inset-0 bg-amber-500 rounded-[48px] animate-ping opacity-20"></div>
+                  <Clock size={64} className="text-white" />
+               </div>
+               <h2 className="text-4xl font-black dark:text-white mb-2">طلبك قيد المراجعة</h2>
+               <p className="text-slate-400 font-bold mb-12 px-6">سوف نرسل لك إشعاراً فور قبول الطلب وتعبئة رصيدك بمبلغ {rechargeAmount} ل.س</p>
+               <button onClick={() => setActiveView('home')} className="w-full bg-slate-900 dark:bg-white dark:text-slate-900 text-white font-black py-6 rounded-[32px] text-xl mt-auto mb-10">العودة للرئيسية</button>
+            </div>
+          );
+        }
+        return null;
+
+      case 'admin_requests':
+        return (
+          <div className="p-6 pt-16 flex flex-col min-h-screen pb-36 animate-in fade-in" dir="rtl">
+             <div className="flex justify-between items-center mb-6">
+                <button onClick={() => setActiveView('home')} className="p-4 bg-white dark:bg-slate-800 rounded-2xl shadow-sm"><ArrowLeft className="rotate-180 dark:text-white" /></button>
+                <h2 className="text-2xl font-black dark:text-white">لوحة الإشراف والإدارة</h2>
+             </div>
+
+             {/* Admin Section Tabs */}
+             <div className="flex bg-slate-100 dark:bg-slate-900 p-1 rounded-2xl mb-8">
+                <button 
+                  onClick={() => setAdminTab('requests')} 
+                  className={`flex-1 py-3 text-xs font-black rounded-xl transition ${adminTab === 'requests' ? 'bg-white dark:bg-slate-800 text-emerald-600 dark:text-white shadow-sm' : 'text-slate-400 dark:text-slate-500'}`}
+                >
+                  طلبات الشحن المعلقة ({rechargeService.getRequests().filter(r => r.status === 'pending').length})
+                </button>
+                <button 
+                  onClick={() => setAdminTab('offers')} 
+                  className={`flex-1 py-3 text-xs font-black rounded-xl transition ${adminTab === 'offers' ? 'bg-white dark:bg-slate-800 text-emerald-600 dark:text-white shadow-sm' : 'text-slate-400 dark:text-slate-500'}`}
+                >
+                  إدارة العروض والخصومات
+                </button>
+             </div>
+
+             {adminTab === 'requests' ? (
+               <div className="space-y-4">
+                  {rechargeService.getRequests().filter(r => r.status === 'pending').length === 0 ? (
+                    <div className="text-center py-16 bg-white dark:bg-slate-900 rounded-[32px] border border-slate-100 dark:border-slate-800 p-8">
+                      <CheckCircle2 className="mx-auto text-emerald-500 w-16 h-16 mb-4" />
+                      <h4 className="text-lg font-bold dark:text-white mb-2">لا توجد طلبات معلقة</h4>
+                      <p className="text-slate-400 text-sm">لقد قمت بمعالجة كافة طلبات شحن رصيد المستخدمين بنجاح!</p>
+                    </div>
+                  ) : (
+                    rechargeService.getRequests().filter(r => r.status === 'pending').map(req => (
+                      <div key={req.id} className="bg-white dark:bg-slate-900 rounded-[32px] p-6 shadow-sm border border-slate-100 dark:border-slate-800">
+                         <div className="flex justify-between mb-4">
+                            <div className="text-right">
+                               <p className="font-black dark:text-white">{req.userName}</p>
+                               <p className="text-[10px] text-slate-400">{req.userId}</p>
+                            </div>
+                            <p className="text-xl font-black text-emerald-600">{req.amount.toLocaleString()} ل.س</p>
+                         </div>
+                         <img src={req.receiptImage} className="w-full h-48 object-cover rounded-2xl mb-4 border border-slate-100" />
+                         <div className="flex gap-3">
+                            <button onClick={() => { handleApproveRecharge(req.id, req.amount, req.userId); setActiveView('admin_requests'); }} className="flex-1 bg-emerald-600 text-white font-bold py-3 rounded-xl hover:bg-emerald-500 transition">موافقة</button>
+                            <button onClick={() => { rechargeService.updateStatus(req.id, 'rejected'); triggerToast('تم الرفض', 'error'); setActiveView('admin_requests'); }} className="flex-1 bg-red-50 text-red-600 font-bold py-3 rounded-xl hover:bg-red-100 transition">رفض</button>
+                         </div>
+                      </div>
+                    ))
+                  )}
+               </div>
+             ) : (
+               <div className="space-y-8 animate-in fade-in duration-300">
+                 {/* Add Offer Form */}
+                 <form onSubmit={handleAddOffer} className="bg-white dark:bg-slate-900 rounded-[32px] p-6 shadow-sm border border-slate-100 dark:border-slate-800 space-y-4 text-right">
+                    <h3 className="text-sm font-black dark:text-white mb-2 flex items-center gap-2">
+                      <Gift className="text-emerald-500" size={20} />
+                      إضافة عرض ترويجي جديد
+                    </h3>
+                    
+                    <div>
+                       <label className="block text-[10px] font-black text-slate-400 mb-1.5">عنوان العرض العريض *</label>
+                       <input 
+                         type="text"
+                         required
+                         value={newOfferTitle}
+                         onChange={(e) => setNewOfferTitle(e.target.value)}
+                         placeholder="مثال: حسم 10% لطلاب الجامعات"
+                         className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-2xl p-4 text-xs dark:text-white outline-none focus:border-emerald-500"
+                       />
+                    </div>
+
+                    <div>
+                       <label className="block text-[10px] font-black text-slate-400 mb-1.5">تفاصيل العرض ووصفه *</label>
+                       <textarea 
+                         required
+                         value={newOfferDesc}
+                         onChange={(e) => setNewOfferDesc(e.target.value)}
+                         placeholder="اشرح شروط العرض وطريقة الاستفادة منه بالتفصيل..."
+                         rows={2}
+                         className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-2xl p-4 text-xs dark:text-white outline-none focus:border-emerald-500"
+                       />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                       <div>
+                          <label className="block text-[10px] font-black text-slate-400 mb-1.5">نسبة/قيمة الخصم</label>
+                          <input 
+                            type="text"
+                            value={newOfferDiscount}
+                            onChange={(e) => setNewOfferDiscount(e.target.value)}
+                            placeholder="مثال: %10+ أو مجاني"
+                            className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-2xl p-4 text-xs dark:text-white outline-none focus:border-emerald-500"
+                          />
+                       </div>
+                       <div>
+                          <label className="block text-[10px] font-black text-slate-400 mb-1.5">رمز الكوبون (إن وجد)</label>
+                          <input 
+                            type="text"
+                            value={newOfferCode}
+                            onChange={(e) => setNewOfferCode(e.target.value)}
+                            placeholder="مثال: SHAM10"
+                            className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-2xl p-4 text-xs dark:text-white outline-none focus:border-emerald-500 font-mono tracking-wider text-right"
+                          />
+                       </div>
+                    </div>
+
+                    <div>
+                       <label className="block text-[10px] font-black text-slate-400 mb-1.5">تاريخ الانتهاء</label>
+                       <input 
+                         type="text"
+                         value={newOfferExpiry}
+                         onChange={(e) => setNewOfferExpiry(e.target.value)}
+                         placeholder="مثال: 2026-12-31"
+                         className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-2xl p-4 text-xs dark:text-white outline-none focus:border-emerald-500"
+                       />
+                    </div>
+
+                    <button 
+                      type="submit"
+                      disabled={isSubmittingOffer}
+                      className="w-full bg-emerald-600 hover:bg-emerald-500 active:scale-95 disabled:bg-emerald-400 text-white font-black py-4 rounded-2xl text-xs transition-all flex items-center justify-center gap-2"
+                    >
+                      {isSubmittingOffer ? <Loader2 className="animate-spin w-4 h-4" /> : 'حفظ ونشر العرض فوراً'}
+                    </button>
+                 </form>
+
+                 {/* Offers List */}
+                 <div className="space-y-4">
+                    <h3 className="text-sm font-black dark:text-white mb-2 text-right">العروض المنشورة حالياً</h3>
+                    {offers.length === 0 ? (
+                      <p className="text-xs font-bold text-slate-400 text-center py-6">لا توجد عروض منشورة في النظام حالياً.</p>
+                    ) : (
+                      offers.map((offer) => (
+                        <div key={offer.id} className="bg-white dark:bg-slate-900 rounded-[24px] p-4 shadow-sm border border-slate-100 dark:border-slate-800 flex justify-between items-center text-right">
+                           <div className="flex-1 min-w-0 pr-2">
+                              <p className="font-extrabold text-xs dark:text-white truncate">{offer.title}</p>
+                              <p className="text-[10px] text-slate-400 truncate mt-0.5">{offer.description}</p>
+                              {offer.code && <span className="inline-block mt-2 bg-slate-100 dark:bg-slate-800 text-emerald-600 font-mono text-[9px] font-black px-2 py-0.5 rounded">كوبون: {offer.code}</span>}
+                           </div>
+                           <button 
+                             onClick={() => {
+                               if (confirm('هل أنت متأكد من حذف هذا العرض؟')) {
+                                 handleDeleteOffer(offer.id);
+                               }
+                             }} 
+                             className="p-3 bg-red-50 text-red-600 rounded-2xl hover:bg-red-100 transition"
+                           >
+                             <Trash size={16} />
+                           </button>
+                        </div>
+                      ))
+                    )}
+                 </div>
+               </div>
+             )}
+          </div>
+        );
+
+      case 'cards':
+        return (
+          <div className="bg-slate-50 dark:bg-slate-950 min-h-screen animate-in fade-in pt-12 pb-24" dir="rtl">
+            <CardList 
+              cards={cards} 
+              onDeleteCard={(id) => {
+                setCards(prev => prev.filter(c => c.id !== id));
+                triggerToast('تم حذف البطاقة بنجاح', 'success');
+              }} 
+              onRenameCard={(id, newAlias) => {
+                setCards(prev => prev.map(c => c.id === id ? { ...c, alias: newAlias } : c));
+                triggerToast('تم تعديل اسم البطاقة بنجاح', 'success');
+              }}
+              onMakePrimary={(id) => {
+                setCards(prev => {
+                  const idx = prev.findIndex(c => c.id === id);
+                  if (idx <= 0) return prev;
+                  const updated = [...prev];
+                  const [item] = updated.splice(idx, 1);
+                  return [item, ...updated];
+                });
+                triggerToast('تم تعيين البطاقة كافتراضية', 'success');
+              }}
+              dispatch={dispatchAction} 
+              getPermission={() => ({ allowed: true })} 
+              onTriggerNfcSync={(card) => setSyncCard(card)}
+            />
+          </div>
+        );
+
+      case 'offers':
+        return (
+          <div className="p-6 pt-16 flex flex-col min-h-screen pb-36 animate-in fade-in" dir="rtl">
+             {/* Header */}
+             <div className="mb-8 text-right space-y-1">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-4">
+                   <Gift size={26} />
+                </div>
+                <h2 className="text-3xl font-black dark:text-white">عروض الشام الرقمية</h2>
+                <p className="text-slate-400 font-bold text-xs">توفير مستمر وحسم حقيقي على رحلاتك اليومية</p>
+             </div>
+
+             {/* Offers List */}
+             {loadingOffers ? (
+               <div className="flex flex-col items-center justify-center py-20 space-y-4">
+                 <Loader2 className="animate-spin text-emerald-600 w-10 h-10" />
+                 <p className="text-sm font-bold text-slate-400">جاري تحميل العروض المتوفرة...</p>
+               </div>
+             ) : offers.length === 0 ? (
+               <div className="text-center py-16 bg-white dark:bg-slate-900 rounded-[32px] border border-slate-100 dark:border-slate-800 p-8">
+                 <Tag className="mx-auto text-slate-300 dark:text-slate-700 w-16 h-16 mb-4" />
+                 <h4 className="text-lg font-bold dark:text-white mb-2">لا توجد عروض حالياً</h4>
+                 <p className="text-slate-400 text-sm">ترقبوا إطلاق عروض جديدة قريباً من قبل إدارة بطاقة الشام الرقمية.</p>
+               </div>
+             ) : (
+               <div className="space-y-6">
+                 {offers.map((offer) => (
+                   <div key={offer.id} className="relative overflow-hidden bg-white dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-[32px] p-6 shadow-md transition-all hover:shadow-lg animate-in slide-in-from-bottom duration-300">
+                     {/* Circular notches on the side to look like a real ticket */}
+                     <div className="absolute top-1/2 -left-4 w-8 h-8 rounded-full bg-slate-50 dark:bg-slate-950 -translate-y-1/2 border-r-2 border-dashed border-slate-200 dark:border-slate-800"></div>
+                     <div className="absolute top-1/2 -right-4 w-8 h-8 rounded-full bg-slate-50 dark:bg-slate-950 -translate-y-1/2 border-l-2 border-dashed border-slate-200 dark:border-slate-800"></div>
+
+                     <div className="flex justify-between items-start mb-3 pl-2 pr-2">
+                       <span className="bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 font-extrabold text-[10px] px-3 py-1.5 rounded-full">
+                         {offer.discount || "حسم خاص"}
+                       </span>
+                       {offer.expiryDate && (
+                         <span className="text-[10px] text-slate-400 font-bold flex items-center gap-1">
+                           <Clock size={12} />
+                           ينتهي: {offer.expiryDate}
+                         </span>
+                       )}
+                     </div>
+
+                     <div className="px-2">
+                       <h3 className="text-lg font-black dark:text-white mb-2 leading-snug">{offer.title}</h3>
+                       <p className="text-slate-500 dark:text-slate-400 text-xs leading-relaxed mb-4">{offer.description}</p>
+
+                       {offer.code && (
+                         <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-950 p-3 rounded-2xl border border-slate-100 dark:border-slate-800 mt-2">
+                           <div className="text-right">
+                             <p className="text-[9px] text-slate-400 font-bold">رمز الكوبون</p>
+                             <p className="text-sm font-black font-mono text-emerald-600 tracking-wider mt-0.5">{offer.code}</p>
+                           </div>
+                           <button 
+                             onClick={() => {
+                               navigator.clipboard.writeText(offer.code);
+                               triggerToast('تم نسخ رمز الخصم', 'success');
+                             }}
+                             className="bg-emerald-600 text-white p-2 rounded-xl text-xs font-bold hover:bg-emerald-500 active:scale-95 transition-all flex items-center gap-1.5 px-3"
+                           >
+                             <Copy size={12} />
+                             نسخ
+                           </button>
+                         </div>
+                       )}
+                     </div>
+                   </div>
+                 ))}
+               </div>
+             )}
+          </div>
+        );
+
+      case 'transport':
+        return (
+          <div className="relative w-full h-screen animate-in fade-in" dir="rtl">
+            <div className="w-full h-full pb-24">
+              <TransportMap 
+                initialRoute={selectedRoute} 
+                onSaveRoute={handleSaveRoute} 
+                isAlreadySaved={handleIsRouteSaved} 
+              />
+            </div>
+          </div>
+        );
+
+      case 'profile':
+        return (
+          <div className="bg-slate-50 dark:bg-slate-950 min-h-screen animate-in fade-in pb-24" dir="rtl">
+            <Profile 
+              user={session?.user || null} 
+              dispatch={dispatchAction} 
+              getPermission={() => ({ allowed: true })} 
+              onSelectRoute={handleSelectRoute} 
+              isDarkMode={isDarkMode} 
+              onToggleDarkMode={() => setIsDarkMode(!isDarkMode)} 
+              onNotify={() => triggerToast('لا توجد إشعارات جديدة حالياً', 'success')} 
+            />
+          </div>
+        );
+
+      case 'security':
+        return (
+          <SecurityCenter onBack={() => setActiveView('profile')} />
+        );
+
+      case 'transfer':
+        return (
+          <TransferView 
+            cards={cards} 
+            setCards={setCards} 
+            setTransactions={setTransactions}
+            triggerToast={triggerToast} 
+            setActiveView={setActiveView} 
+          />
+        );
+
+      case 'qr_payment':
+        return (
+          <QrPaymentView 
+            cards={cards} 
+            setCards={setCards} 
+            setTransactions={setTransactions}
+            triggerToast={triggerToast} 
+            setActiveView={setActiveView} 
+          />
+        );
+
+      case 'transactions_history':
+        return (
+          <TransactionsHistory 
+            transactions={transactions} 
+            onBack={() => setActiveView('home')} 
+          />
+        );
+
+      default:
+        return (
+          <div className="space-y-6 pb-36">
+             <header className="px-6 pt-14 flex justify-between items-center">
+                <div className="flex items-center gap-4 text-right">
+                   <img src={session?.user.avatar} className="w-12 h-12 rounded-2xl border-2 border-emerald-500 shadow-lg" alt="avatar" />
+                   <div><h1 className="text-xl font-black dark:text-white">أهلاً، {session?.user.fullName.split(' ')[0]}</h1></div>
+                </div>
+                <div className="flex gap-2">
+                   {session?.role === 'admin' && (
+                     <button onClick={() => setActiveView('admin_requests')} className="w-12 h-12 bg-amber-100 text-amber-600 rounded-2xl flex items-center justify-center shadow-sm relative">
+                        <ShieldCheck size={24} />
+                        {rechargeService.getRequests().filter(r => r.status === 'pending').length > 0 && (
+                          <span className="absolute -top-1 -right-1 bg-red-600 text-white text-[10px] w-5 h-5 rounded-full flex items-center justify-center font-bold">{rechargeService.getRequests().filter(r => r.status === 'pending').length}</span>
+                        )}
+                     </button>
+                   )}
+                   
+                </div>
+             </header>
+
+             {cards[0]?.pendingNfcAmount && cards[0].pendingNfcAmount > 0 ? (
+               <div 
+                 onClick={() => {
+                   setSyncCard(cards[0]);
+                    //
+                   setShowInspector(true);
+                 }}
+                 className="mx-6 p-5 justify-between items-center flex rounded-[32px] bg-amber-500/10 dark:bg-amber-500/20 border-2 border-amber-500/20 hover:border-amber-500/40 text-amber-800 dark:text-amber-300 cursor-pointer animate-pulse transition active:scale-95 duration-500"
+               >
+                 <div className="flex items-center gap-4 text-right">
+                   <div className="w-12 h-12 rounded-2xl bg-amber-500 text-white flex items-center justify-center font-black text-sm">NFC</div>
+                   <div>
+                     <h4 className="font-extrabold text-xs leading-tight">شحن رصيد معلق بانتظار NFC</h4>
+                     <p className="text-[10px] font-bold mt-1 text-amber-600 dark:text-amber-400">مرر البطاقة لتعبئة {(cards[0].pendingNfcAmount).toLocaleString()} ل.س</p>
+                   </div>
+                 </div>
+                 <div className="text-[10px] font-black bg-amber-500 text-white px-3 py-1.5 rounded-xl">اضغط للتمرير</div>
+               </div>
+             ) : null}
+
+             <BalanceCard card={cards[0]} dispatch={dispatchAction} getPermission={() => ({ allowed: true })} />
+             <QuickActions dispatch={dispatchAction} getPermission={() => ({ allowed: true })} />
+
+
+             {/* Transactions Section */}
+             <div className="px-6 space-y-4">
+               <div className="flex justify-between items-center px-1">
+                 <h3 className="font-extrabold text-slate-900 dark:text-white text-lg">آخر العمليات</h3>
+                 <button 
+                   id="show-all-transactions"
+                   onClick={() => setActiveView('transactions_history')} 
+                   className="text-xs text-emerald-600 dark:text-emerald-400 font-extrabold hover:underline cursor-pointer active:scale-95 transition"
+                 >
+                   عرض الكل
+                 </button>
+               </div>
+
+               <div className="space-y-3">
+                 {transactions.slice(0, 4).map(tx => {
+                   const isRecharge = tx.type === 'recharge';
+                   return (
+                     <div key={tx.id} className="bg-white dark:bg-slate-900 rounded-[28px] p-4 flex justify-between items-center border border-slate-100 dark:border-slate-800 shadow-sm">
+                       <div className="flex items-center gap-3">
+                         <div className={`w-11 h-11 rounded-xl flex items-center justify-center font-black ${
+                           isRecharge 
+                             ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400' 
+                             : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                         }`}>
+                           {isRecharge ? '+' : '-'}
+                         </div>
+                         <div className="text-right">
+                           <h4 className="font-black text-xs text-slate-800 dark:text-slate-100">{tx.title}</h4>
+                           <p className="text-[10px] text-slate-400 font-bold mt-0.5">{tx.subtitle}</p>
+                         </div>
+                       </div>
+                       <div className="text-left">
+                         <div className={`font-black text-xs ${isRecharge ? 'text-emerald-600' : 'text-slate-800 dark:text-white'}`}>
+                           {isRecharge ? '+' : ''}{tx.amount.toLocaleString()} ل.س
+                         </div>
+                         <span className="text-[8px] text-slate-400 block mt-0.5">
+                           {new Date(tx.timestamp).toLocaleTimeString('ar-SY', { hour: '2-digit', minute: '2-digit' })}
+                         </span>
+                       </div>
+                     </div>
+                   );
+                 })}
+               </div>
+             </div>
+          </div>
+        );
+    }
+  };
+
+  // Check if it is driver route
+  const isDriverView = window.location.pathname === '/driver' || window.location.search.includes('view=driver');
+
+  if (isDriverView) {
+    return <DriverDashboard />;
+  }
+
+  if (!session) return <Auth onLogin={setSession} />;
+
+  return (
+    <div className="max-w-md mx-auto bg-slate-50 dark:bg-slate-950 min-h-screen relative overflow-hidden flex flex-col shadow-2xl" dir="rtl">
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+      <main className="flex-1 relative overflow-y-auto no-scrollbar">{renderView()}</main>
+      {['home', 'cards', 'offers', 'profile', 'qr_payment', 'transactions_history'].includes(activeView) && (
+        <div className="fixed bottom-10 left-1/2 -translate-x-1/2 w-[92%] z-[100]">
+          <nav className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-2xl p-2 rounded-[42px] shadow-xl flex justify-between items-center border border-white/40">
+            <NavTab active={activeView === 'home' || activeView === 'transactions_history'} icon={<Home />} label="الرئيسية" onClick={() => setActiveView('home')} />
+            <NavTab active={activeView === 'cards'} icon={<CreditCard />} label="محفظتي" onClick={() => setActiveView('cards')} />
+            <button 
+              onClick={() => setActiveView('qr_payment')} 
+              className={`w-16 h-16 rounded-[28px] text-white shadow-xl -mt-10 border-[4px] border-white dark:border-slate-950 flex items-center justify-center transition-all ${
+                activeView === 'qr_payment' 
+                  ? 'bg-emerald-500 scale-110 shadow-emerald-500/40 ring-4 ring-emerald-500/20' 
+                  : 'bg-emerald-600 hover:bg-emerald-500 hover:scale-105'
+              }`}
+            >
+              <QrCode size={30} />
+            </button>
+            <NavTab active={activeView === 'offers'} icon={<Tag />} label="عروض" onClick={() => setActiveView('offers')} />
+            <NavTab active={activeView === 'profile'} icon={<User />} label="حسابي" onClick={() => setActiveView('profile')} />
+          </nav>
+        </div>
+      )}
+
+      {showInspector && (
+        <CardInspector 
+          onClose={() => setShowInspector(false)} 
+          nfcStatus={system.nfcStatus} 
+          setNfcStatus={(s) => setSystem(p => ({...p, nfcStatus: s}))} 
+          dispatch={dispatchAction} 
+          cards={cards}
+          setCards={setCards}
+        />
+      )}
+      {syncCard && (
+        <NfcSyncModal 
+          card={syncCard} 
+          token={session?.token || ""} 
+          onClose={() => setSyncCard(null)} 
+          onSuccess={(newBalance) => {
+            setCards(prev => prev.map(c => c.id === syncCard.id ? { ...c, balance: newBalance, pendingNfcAmount: 0 } : c));
+            setTransactions(prev => [
+              {
+                id: 'tx_nfc_' + Date.now(),
+                cardId: syncCard.id,
+                cardName: syncCard.alias || "بطاقة فيزيائية",
+                type: 'recharge',
+                title: "شحن عبر NFC نجح",
+                subtitle: "تم تفريغ الرصيد المعلق بنجاح",
+                amount: syncCard.pendingNfcAmount || 0,
+                timestamp: Date.now()
+              },
+              ...prev
+            ]);
+            setSyncCard(null);
+          }} 
+        />
+      )}
+      {showAddCard && (
+        <AddCardModal 
+          onClose={() => setShowAddCard(false)} 
+          onAdd={(newCard) => {
+            if (session?.token) {
+              fetch('/api/cards/add', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${session.token}`
+                },
+                body: JSON.stringify(newCard)
+              })
+              .then(res => {
+                if (res.ok) {
+                  loadDashboard();
+                  triggerToast('تمت إضافة البطاقة بنجاح', 'success');
+                } else {
+                  triggerToast('فشل إضافة البطاقة بالخادم', 'error');
+                }
+              })
+              .catch(err => {
+                // Offline fallback
+                setCards(prev => [...prev, newCard]);
+                triggerToast('تم الحفظ محلياً (وضع العمل دون اتصال)', 'success');
+              });
+            } else {
+              setCards(prev => [...prev, newCard]);
+              triggerToast('تمت إضافة البطاقة بنجاح', 'success');
+            }
+            setShowAddCard(false);
+          }} 
+        />
+      )}
+    </div>
+  );
+};
+
+const TransferView: React.FC<{
+  cards: any[];
+  setCards: React.Dispatch<React.SetStateAction<any[]>>;
+  setTransactions: React.Dispatch<React.SetStateAction<Transaction[]>>;
+  triggerToast: (message: string, type: 'success' | 'error') => void;
+  setActiveView: (view: any) => void;
+}> = ({ cards, setCards, setTransactions, triggerToast, setActiveView }) => {
+  const [recipientPhone, setRecipientPhone] = useState('');
+  const [transferAmt, setTransferAmt] = useState('2500');
+  const [selectedCardId, setSelectedCardId] = useState(cards[0]?.id || '');
+
+  const handleTransferSubmit = () => {
+    if (!recipientPhone.trim()) {
+      triggerToast('الرجاء إدخال رقم هاتف المستلم', 'error');
+      return;
+    }
+    const amt = parseInt(transferAmt);
+    if (isNaN(amt) || amt <= 0) {
+      triggerToast('المبلغ غير صالح', 'error');
+      return;
+    }
+    const card = cards.find(c => c.id === selectedCardId);
+    if (!card) {
+      triggerToast('البطاقة المحددة غير موجودة', 'error');
+      return;
+    }
+    if (card.balance < amt) {
+      triggerToast('رصيد البطاقة غير كافٍ لإتمام عملية التحويل', 'error');
+      return;
+    }
+
+    setCards(prev => prev.map(c => c.id === selectedCardId ? { ...c, balance: c.balance - amt } : c));
+    setTransactions(prev => [
+      {
+        id: 'tx_transfer_' + Math.random().toString(36).substr(2, 9),
+        cardId: selectedCardId,
+        cardName: card.alias,
+        type: 'transfer',
+        title: 'تحويل رصيد صادر',
+        subtitle: `إلى الرقم ${recipientPhone}`,
+        amount: -amt,
+        timestamp: Date.now()
+      },
+      ...prev
+    ]);
+    triggerToast(`تم تحويل ${amt.toLocaleString()} ل.س للمشترك ${recipientPhone} بنجاح`, 'success');
+    setActiveView('home');
+  };
+
+  return (
+    <div className="p-8 pt-16 flex flex-col min-h-screen bg-slate-50 dark:bg-slate-900" dir="rtl">
+      <div className="flex items-center gap-4 mb-8">
+        <button onClick={() => setActiveView('home')} className="w-12 h-12 bg-white dark:bg-slate-800 rounded-2xl flex items-center justify-center shadow-sm"><ArrowLeft className="rotate-180 dark:text-white" /></button>
+        <h2 className="text-2xl font-black dark:text-white">تحويل رصيد</h2>
+      </div>
+
+      <div className="space-y-6 flex-1">
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-[32px] border border-slate-100 dark:border-slate-700 shadow-sm text-right">
+          <p className="text-[10px] font-black text-slate-400 mb-3 uppercase">اختر بطاقة الدفع</p>
+          {cards.length === 1 ? (
+            <div className="p-4 bg-slate-50 dark:bg-slate-700 rounded-2xl flex items-center justify-between">
+              <span className="font-extrabold text-sm dark:text-white">{cards[0].alias}</span>
+              <span className="text-xs font-black text-emerald-600 dark:text-emerald-400">{cards[0].balance.toLocaleString()} ل.س</span>
+            </div>
+          ) : (
+            <select 
+              value={selectedCardId} 
+              onChange={(e) => setSelectedCardId(e.target.value)}
+              className="w-full p-4 bg-slate-50 dark:bg-slate-700 border-none rounded-2xl font-bold font-sans text-sm pr-4 focus:ring-2 focus:ring-emerald-500 dark:text-white outline-none"
+            >
+              {cards.map(c => (
+                <option key={c.id} value={c.id}>{c.alias} ({c.balance.toLocaleString()} ل.س)</option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-[32px] border border-slate-100 dark:border-slate-700 shadow-sm text-right">
+          <p className="text-[10px] font-black text-slate-400 mb-3 uppercase">رقم الهاتف المستلم (تنسيق دولي)</p>
+          <input 
+            type="tel" 
+            placeholder="+963..."
+            value={recipientPhone}
+            onChange={(e) => setRecipientPhone(e.target.value)}
+            dir="ltr"
+            className="w-full bg-slate-50 dark:bg-slate-700 border-none rounded-2xl p-4 text-center font-bold text-sm focus:ring-2 focus:ring-emerald-500 dark:text-white outline-none"
+          />
+        </div>
+
+        <div className="bg-white dark:bg-slate-800 p-6 rounded-[32px] border border-slate-100 dark:border-slate-700 shadow-sm text-right">
+          <p className="text-[10px] font-black text-slate-400 mb-3 uppercase">مبلغ التحويل (ل.س)</p>
+          <input 
+            type="number" 
+            value={transferAmt}
+            onChange={(e) => setTransferAmt(e.target.value)}
+            className="w-full text-center text-4xl font-black bg-transparent outline-none dark:text-white"
+          />
+        </div>
+      </div>
+
+      <div className="mt-8 pb-10">
+        <button 
+          onClick={handleTransferSubmit}
+          className="w-full bg-emerald-600 text-white font-black py-6 rounded-[32px] shadow-2xl active:scale-95 transition-all text-xl"
+        >
+          تأكيد عملية التحويل
+        </button>
+      </div>
+    </div>
+  );
+};
+
+const QrPaymentView: React.FC<{
+  cards: any[];
+  setCards: React.Dispatch<React.SetStateAction<any[]>>;
+  setTransactions: React.Dispatch<React.SetStateAction<Transaction[]>>;
+  triggerToast: (message: string, type: 'success' | 'error') => void;
+  setActiveView: (view: any) => void;
+}> = ({ cards, setCards, setTransactions, triggerToast, setActiveView }) => {
+  const [selectedCardId, setSelectedCardId] = useState(cards[0]?.id || '');
+  const currentCard = cards.find(c => c.id === selectedCardId);
+  const [payStep, setPayStep] = useState<'scan' | 'done'>('scan');
+  const [paymentDetails, setPaymentDetails] = useState<{ amount: number; cardName: string; txId: string; busName?: string } | null>(null);
+
+  const [buses, setBuses] = useState<any[]>([]);
+  const [selectedBusId, setSelectedBusId] = useState<string>('bus_M1');
+
+  useEffect(() => {
+    fetch('/api/buses/locations')
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          setBuses(data);
+          if (data.length > 0) {
+            setSelectedBusId(data[0].id);
+          }
+        }
+      })
+      .catch(err => console.error("Error loading buses in client scan", err));
+  }, []);
+
+  const currentBus = buses.find(b => b.id === selectedBusId) || { id: 'bus_M1', ticket_price: 1000, route_name: 'ميكرو البرامكة - المزة جبل (خط داخلي قصير)' };
+  const currentBusPrice = currentBus.ticket_price || 1000;
+
+  // Real-time camera & scanner states
+  const [cameraState, setCameraState] = useState<'inactive' | 'loading' | 'active' | 'error'>('inactive');
+  const [activeCamera, setActiveCamera] = useState<'back' | 'front'>('back');
+  const [isFlashActive, setIsFlashActive] = useState(false);
+  const [fps, setFps] = useState(30);
+  const [isScanningActive, setIsScanningActive] = useState(true);
+  const [isCapturing, setIsCapturing] = useState(false);
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  // High-fidelity web audio scanner beep synthesizer (produces realistic physical transit device beep)
+  const playPhysicalBeep = () => {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(1450, audioCtx.currentTime); // Crisp piercing terminal chirp
+      gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.12);
+    } catch (e) {
+      console.warn("Audio Context beep not supported directly, skipping sound", e);
+    }
+  };
+
+  const startCameraStream = async (facing: 'back' | 'front') => {
+    setCameraState('loading');
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: facing === 'back' ? 'environment' : 'user',
+          width: { ideal: 480 },
+          height: { ideal: 480 }
+        }
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play().catch(err => console.log("Play video error", err));
+      }
+      setCameraState('active');
+    } catch (err) {
+      console.warn("Physical camera blocked or unavailable, enabling Damascus Transit high-fidelity digital scanner simulation", err);
+      setCameraState('error');
+    }
+  };
+
+  useEffect(() => {
+    startCameraStream(activeCamera);
+
+    // Dynamic FPS oscillation for high realism
+    const fpsInterval = setInterval(() => {
+      setFps(Math.floor(28 + Math.random() * 4));
+    }, 1500);
+
+    return () => {
+      clearInterval(fpsInterval);
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [activeCamera]);
+
+  const toggleFlashLight = async () => {
+    const nextFlashState = !isFlashActive;
+    setIsFlashActive(nextFlashState);
+
+    // Attempt hardware flash control via Torch constraints
+    try {
+      if (streamRef.current) {
+        const videoTrack = streamRef.current.getVideoTracks()[0];
+        if (videoTrack) {
+          const capabilities = (videoTrack as any).getCapabilities?.() || {};
+          if (capabilities.torch) {
+            await (videoTrack as any).applyConstraints({
+              advanced: [{ torch: nextFlashState }]
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.log("Hardware torch is unavailable on this system", e);
+    }
+  };
+
+  const toggleCameraDirection = () => {
+    setActiveCamera(prev => prev === 'back' ? 'front' : 'back');
+  };
+
+  const triggerSelfScan = () => {
+    if (!currentCard) {
+      triggerToast('لا تملك بطاقة نشطة حالياً لإكمال الدفع', 'error');
+      return;
+    }
+    
+    if (currentCard.balance < currentBusPrice) {
+      triggerToast(`الرصيد غير كافٍ لدفع أجرة الباص (${currentBusPrice.toLocaleString()} ل.س). يرجى شحن البطاقة.`, 'error');
+      return;
+    }
+
+    setIsCapturing(true);
+
+    // Auto trigger hardware stream request if not active
+    if (cameraState !== 'active') {
+      startCameraStream(activeCamera).catch(() => {});
+    }
+
+    // Play instant focal acquisition beep
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gn = audioCtx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(950, audioCtx.currentTime);
+      gn.gain.setValueAtTime(0.08, audioCtx.currentTime);
+      osc.connect(gn);
+      gn.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.06);
+    } catch (e) {}
+
+    // Wait exactly 1.2 seconds for realistic optical camera focus scan feedback
+    setTimeout(() => {
+      setIsScanningActive(false);
+      playPhysicalBeep();
+
+      const session = authStore.getSession();
+      if (session?.token) {
+        fetch('/api/trips/pay-qr', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.token}`
+          },
+          body: JSON.stringify({ cardId: selectedCardId, busId: selectedBusId })
+        })
+        .then(async res => {
+          if (res.ok) {
+            const data = await res.json();
+            // Update cards and transactions with server-authoritative data
+            setCards(prev => prev.map(c => c.id === selectedCardId ? { ...c, balance: data.balance } : c));
+            setTransactions(prev => [data.transaction, ...prev]);
+            
+            setPaymentDetails({
+              amount: currentBusPrice,
+              cardName: currentCard.alias,
+              txId: data.transaction.id,
+              busName: currentBus.route_name
+            });
+
+            setTimeout(() => {
+              setPayStep('done');
+              triggerToast('تم خصم أجرة المعبر بنجاح', 'success');
+              setIsCapturing(false);
+              setIsScanningActive(true);
+            }, 300);
+          } else {
+            const errData = await res.json().catch(() => ({}));
+            triggerToast(errData.message || 'فشل خصم الأجرة من الخادم', 'error');
+            setIsCapturing(false);
+            setIsScanningActive(true);
+          }
+        })
+        .catch(err => {
+          // OFFLINE FALLBACK - SYNC LATER
+          console.warn("Offline, performing local transit transaction debit");
+          const localTxId = 'tx_pay_offline_' + Math.random().toString(36).substr(2, 9);
+          
+          const newCards = cards.map(c => {
+            if (c.id === selectedCardId) {
+              return { ...c, balance: c.balance - currentBusPrice };
+            }
+            return c;
+          });
+          setCards(newCards);
+          
+          const offlineTx = {
+            id: localTxId,
+            cardId: selectedCardId,
+            cardName: currentCard.alias,
+            type: 'pay',
+            title: `تذكرة عبور QR (بدون اتصال) - خط ${currentBus.route_code || 'M1'}`,
+            subtitle: currentBus.route_name || 'خصم تعرفة الحافلة',
+            amount: -currentBusPrice,
+            timestamp: Date.now()
+          };
+          setTransactions(prev => [offlineTx, ...prev]);
+          
+          setPaymentDetails({
+            amount: currentBusPrice,
+            cardName: currentCard.alias,
+            txId: localTxId,
+            busName: currentBus.route_name
+          });
+          
+          // Save in offline pending sync queue
+          const pending = JSON.parse(localStorage.getItem('pending_offline_trips') || '[]');
+          pending.push({ cardId: selectedCardId, timestamp: Date.now() });
+          localStorage.setItem('pending_offline_trips', JSON.stringify(pending));
+
+          setTimeout(() => {
+            setPayStep('done');
+            triggerToast('تم الدفع دون اتصال! سيتم المزامنة لاحقاً', 'success');
+            setIsCapturing(false);
+            setIsScanningActive(true);
+          }, 300);
+        });
+      } else {
+        // Fallback for demo guest
+        const newCards = cards.map(c => {
+          if (c.id === selectedCardId) {
+            return {
+              ...c,
+              balance: c.balance - currentBusPrice
+            };
+          }
+          return c;
+        });
+
+        setCards(newCards);
+        setTransactions(prev => [
+          {
+            id: 'tx_pay_' + Math.random().toString(36).substr(2, 9),
+            cardId: selectedCardId,
+            cardName: currentCard.alias,
+            type: 'pay',
+            title: `تذكرة عبور QR - خط ${currentBus.route_code || 'M1'}`,
+            subtitle: currentBus.route_name || 'خصم تعرفة الحافلة',
+            amount: -currentBusPrice,
+            timestamp: Date.now()
+          },
+          ...prev
+        ]);
+
+        setPaymentDetails({
+          amount: currentBusPrice,
+          cardName: currentCard.alias,
+          txId: 'TX-' + Math.floor(100000 + Math.random() * 900000),
+          busName: currentBus.route_name
+        });
+
+        setTimeout(() => {
+          setPayStep('done');
+          triggerToast('تم خصم أجرة المعبر بنجاح', 'success');
+          setIsCapturing(false);
+          setIsScanningActive(true);
+        }, 300);
+      }
+    }, 1200);
+  };
+
+  useEffect(() => {
+    let timeout: any;
+    if (cameraState === 'error' && payStep === 'scan' && !isCapturing) {
+      // Auto trigger simulation after 3 seconds for smooth preview demo flow
+      timeout = setTimeout(() => {
+        triggerSelfScan();
+      }, 3000);
+    }
+    return () => clearTimeout(timeout);
+  }, [cameraState, payStep, isCapturing]);
+
+  if (payStep === 'done' && paymentDetails) {
+    return (
+      <div className="p-8 pt-24 pb-36 text-center animate-in zoom-in duration-500 flex flex-col min-h-screen bg-slate-50 dark:bg-slate-950" dir="rtl">
+        <div className="w-32 h-32 bg-emerald-600 rounded-[48px] flex items-center justify-center mx-auto mb-10 shadow-2xl relative">
+          <div className="absolute inset-0 bg-emerald-600 rounded-[48px] animate-ping opacity-25"></div>
+          <CheckCircle size={64} className="text-white" />
+        </div>
+        <h2 className="text-4xl font-black dark:text-white mb-2">تم الدفع بنجاح</h2>
+        <p className="text-slate-400 font-bold mb-12 px-6">أهلاً بك على متن الباص! تم التحقق من تذكرة العبور الرقمية وتحديث الرصيد</p>
+        
+        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-[32px] p-6 text-right space-y-4 w-full shadow-sm max-w-sm mx-auto mb-12">
+          <div className="flex justify-between border-b pb-2 dark:border-slate-800">
+            <span className="text-xs text-slate-400 font-bold">رقم العملية</span>
+            <span className="text-sm font-mono font-black dark:text-white">{paymentDetails.txId}</span>
+          </div>
+          <div className="flex justify-between border-b pb-2 dark:border-slate-800">
+            <span className="text-xs text-slate-400 font-bold">البطاقة المستخدمة</span>
+            <span className="text-sm font-black dark:text-white">{paymentDetails.cardName}</span>
+          </div>
+          <div className="flex justify-between border-b pb-2 dark:border-slate-800">
+            <span className="text-xs text-slate-400 font-bold">الحافلة / الخط</span>
+            <span className="text-sm font-black dark:text-white">{paymentDetails.busName || 'ميكرو البرامكة - المزة جبل'}</span>
+          </div>
+          <div className="flex justify-between pb-2">
+            <span className="text-xs text-slate-400 font-bold">قيمة التعرفة</span>
+            <span className="text-sm font-black text-emerald-600">{paymentDetails.amount.toLocaleString()} ل.س</span>
+          </div>
+        </div>
+
+        <button onClick={() => setActiveView('home')} className="w-full bg-slate-900 dark:bg-white dark:text-slate-900 text-white font-black py-6 rounded-[32px] text-xl mt-auto mb-10 shadow-xl">العودة للرئيسية</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-8 pt-16 pb-36 flex flex-col min-h-screen bg-slate-50 dark:bg-slate-950 text-center" dir="rtl">
+      {/* Visual Header */}
+      <div className="flex justify-between items-center mb-6">
+        <button onClick={() => setActiveView('home')} className="w-12 h-12 bg-white dark:bg-slate-800 rounded-2xl flex items-center justify-center shadow-sm"><ArrowLeft className="rotate-180 dark:text-white" /></button>
+        <h2 className="text-2xl font-black dark:text-white">تذكرة العبور QR</h2>
+        <div className="w-12"></div>
+      </div>
+
+      {/* Styled Source Account Selector */}
+      <div className="bg-white dark:bg-slate-900 p-4 rounded-[28px] border border-slate-100 dark:border-slate-800 shadow-sm text-right mb-6">
+        <p className="text-[10px] font-black text-slate-400 mb-2 uppercase">محفظة الدفع النشطة</p>
+        {cards.length === 1 ? (
+          <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl flex items-center justify-between">
+            <span className="font-extrabold text-xs dark:text-white">{cards[0].alias}</span>
+            <span className="text-xs font-black text-emerald-600 dark:text-emerald-450">
+              {cards[0].balance.toLocaleString()} ل.س
+            </span>
+          </div>
+        ) : (
+          <select 
+            value={selectedCardId} 
+            onChange={(e) => setSelectedCardId(e.target.value)}
+            className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl font-bold text-xs pr-4 dark:text-white outline-none"
+          >
+            {cards.map(c => (
+               <option key={c.id} value={c.id}>{c.alias} ({c.balance.toLocaleString()} ل.س)</option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      {/* Dynamic Route/Bus Selector */}
+      <div className="bg-white dark:bg-slate-900 p-4 rounded-[28px] border border-slate-100 dark:border-slate-800 shadow-sm text-right mb-6">
+        <p className="text-[10px] font-black text-slate-400 mb-2 uppercase">محاكاة مسح ملصق الحافلة (الخط والتعرفة)</p>
+        <select 
+          value={selectedBusId} 
+          onChange={(e) => setSelectedBusId(e.target.value)}
+          className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl font-bold text-xs pr-4 dark:text-white outline-none cursor-pointer"
+        >
+          {buses.map(b => (
+             <option key={b.id} value={b.id} className="dark:bg-slate-900">
+               {b.route_name} - التعرفة: {b.ticket_price.toLocaleString()} ل.س
+             </option>
+          ))}
+        </select>
+      </div>
+
+      {/* 100% REALISTIC QR SCANNER VIEWFINDER */}
+      <div 
+        onClick={() => {
+          if (cameraState !== 'active') {
+            startCameraStream(activeCamera);
+          }
+        }}
+        className="relative mx-auto w-80 h-80 rounded-[44px] overflow-hidden border-2 border-emerald-500/90 shadow-[0_0_50px_rgba(16,185,129,0.3)] bg-slate-950 mb-6 flex flex-col justify-center items-center group cursor-pointer"
+      >
+        
+        {/* Soft Ambient Core Pulse */}
+        {cameraState !== 'error' && (
+          <div className="absolute w-60 h-60 rounded-full bg-emerald-500/10 blur-3xl animate-glow-pulse pointer-events-none z-0"></div>
+        )}
+
+        {/* 1. REAL LIVE CAMERA VIEWSTREAM ELEMENT */}
+        {cameraState === 'active' ? (
+          <video 
+            ref={videoRef} 
+            className="absolute inset-0 w-full h-full object-cover z-0 select-none pointer-events-none" 
+            playsInline 
+            muted
+            autoPlay
+          />
+        ) : cameraState === 'loading' ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-emerald-400 z-10 select-none pointer-events-none">
+            <Loader2 className="animate-spin text-emerald-500 mb-2" size={36} />
+            <span className="text-xs font-bold tracking-wider">جاري تشغيل الكاميرا...</span>
+          </div>
+        ) : (
+          /* Clean minimal state if blocked or inactive */
+          <div className="absolute inset-0 w-full h-full bg-slate-950 flex flex-col items-center justify-center p-6 z-0">
+            <div className="relative z-10 flex flex-col items-center justify-center text-center space-y-2 select-none">
+              <div className="w-14 h-14 rounded-full bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20">
+                {cameraState === 'error' ? (
+                  <CameraOff size={24} className="text-rose-400" />
+                ) : (
+                  <Camera size={24} className="text-emerald-400" />
+                )}
+              </div>
+              <p className="text-xs font-black text-slate-200">
+                {cameraState === 'error' ? 'الرجاء السماح بصلاحية الكاميرا' : 'عدسة الكاميرا النشطة'}
+              </p>
+              <p className="text-[10px] text-slate-400 font-bold max-w-[200px] leading-relaxed">
+                {cameraState === 'error' ? 'يرجى تمكين الكاميرا من إعدادات المتصفح للمسح المباشر.' : 'انقر للدفع أو تمكين الكاميرا'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* 2. DYNAMIC CORNER TARGET BRACKETS */}
+        <div className="absolute inset-8 pointer-events-none z-10">
+          <div className="absolute top-0 left-0 w-6 h-6 border-t-[4px] border-l-[4px] border-emerald-500 rounded-tl-xl shadow-[0_0_8px_#10b981]"></div>
+          <div className="absolute top-0 right-0 w-6 h-6 border-t-[4px] border-r-[4px] border-emerald-500 rounded-tr-xl shadow-[0_0_8px_#10b981]"></div>
+          <div className="absolute bottom-0 left-0 w-6 h-6 border-b-[4px] border-l-[4px] border-emerald-500 rounded-bl-xl shadow-[0_0_8px_#10b981]"></div>
+          <div className="absolute bottom-0 right-0 w-6 h-6 border-b-[4px] border-r-[4px] border-emerald-500 rounded-br-xl shadow-[0_0_8px_#10b981]"></div>
+        </div>
+
+        {/* 3. CENTER GRAPHIC FOCUS BOUNDS */}
+        <div className="absolute w-24 h-24 border border-emerald-500/25 rounded-2xl pointer-events-none z-10 flex items-center justify-center animate-pulse">
+          <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping"></div>
+        </div>
+
+        {/* 4. SMOOTH LASER SCAN LINE */}
+        {isScanningActive && cameraState === 'active' && (
+          <div className={`absolute left-[20px] right-[20px] h-[3px] bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_20px_#10b981,0_0_6px_#34d399] z-20 pointer-events-none ${isCapturing ? 'animate-scan-fast top-[10px]' : 'animate-scan top-[20px]'}`}></div>
+        )}
+
+        {/* Simulated Virtual Flash overlay */}
+        {isFlashActive && (
+          <div className="absolute inset-0 bg-white/20 select-none pointer-events-none z-10 mix-blend-screen transition-all duration-200"></div>
+        )}
+      </div>
+
+      {/* VIEWFINDER UTILITY RAILS (TORCH / MIRROR CAMERA) */}
+      <div className="flex justify-center gap-4 mb-6">
+        <button 
+          onClick={toggleCameraDirection} 
+          className="flex items-center gap-2 px-5 py-3 rounded-full text-xs font-black transition-all bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-100 dark:border-slate-700 active:scale-95"
+        >
+          <RefreshCw size={14} />
+          {activeCamera === 'back' ? 'الكاميرا الأمامية' : 'الكاميرا الخلفية'}
+        </button>
+      </div>
+
+      <p className="text-slate-400 dark:text-slate-300 font-bold text-xs leading-relaxed px-6 mb-8">
+        وجه عدسة الهاتف نحو رمز الاستجابة السريع (QR) المعلق داخل الحافلة أو باص النقل العام ليتم التعرف على معبر التذكرة فوراً.
+      </p>
+    </div>
+  );
+};
+
+const NavTab = ({ active, icon, label, onClick }: any) => (
+  <button onClick={onClick} className={`flex flex-col items-center justify-center w-1/5 h-12 transition-all ${active ? 'text-emerald-600' : 'text-slate-400'}`}>
+    {React.cloneElement(icon, { size: 22 })}
+    {active && <span className="text-[8px] font-black mt-1">{label}</span>}
+  </button>
+);
+
+export default App;
