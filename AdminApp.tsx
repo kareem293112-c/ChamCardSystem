@@ -41,7 +41,7 @@ interface Card {
   cardNumber: string;
   balance: number;
   type: 'digital' | 'physical';
-  status: 'active' | 'blocked';
+  status: 'active' | 'blocked' | 'suspended';
   themeColor: string;
   category: string;
 }
@@ -98,6 +98,11 @@ export default function AdminApp() {
   const [newCardBalance, setNewCardBalance] = useState('5000');
   const [newCardType, setNewCardType] = useState<'digital' | 'physical'>('digital');
   const [newCardUserPhone, setNewCardUserPhone] = useState('');
+
+  // Card Search & Quick Action Panel States
+  const [searchCardQuery, setSearchCardQuery] = useState('');
+  const [foundCard, setFoundCard] = useState<Card | null>(null);
+  const [directRechargeAmount, setDirectRechargeAmount] = useState('');
 
   // Trip Creation Form
   const [ownerName, setOwnerName] = useState('');
@@ -264,6 +269,106 @@ export default function AdminApp() {
       }
     } catch (err) {
       triggerToast("خطأ في الاتصال بالشبكة الموثقة.", "error");
+    }
+  };
+
+  // Search for Card directly in state
+  const handleSearchCard = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!searchCardQuery.trim()) {
+      triggerToast("يرجى إدخال الرقم التسلسلي أو اسم البطاقة للبحث عنها.", "error");
+      return;
+    }
+    const query = searchCardQuery.trim().toLowerCase();
+    const matched = cards.find(c => 
+      c.cardNumber.toLowerCase() === query || 
+      c.cardNumber.toLowerCase().includes(query) || 
+      c.alias.toLowerCase().includes(query) ||
+      (c.userId && c.userId.toLowerCase().includes(query))
+    );
+
+    if (matched) {
+      setFoundCard(matched);
+      triggerToast("تم العثور على تفاصيل البطاقة بنجاح!", "success");
+    } else {
+      setFoundCard(null);
+      triggerToast("لم يتم العثور على أي بطاقة مطابقة لشروط البحث.", "error");
+    }
+  };
+
+  // Direct Card Recharge
+  const handleDirectRecharge = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!foundCard) return;
+    const amount = Number(directRechargeAmount);
+    if (isNaN(amount) || amount <= 0) {
+      triggerToast("يرجى إدخال قيمة شحن صالحة أكبر من الصفر.", "error");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const res = await fetch(`/api/admin/cards/${foundCard.id}/recharge`, {
+         method: 'POST',
+         headers: getHeaders(),
+         body: JSON.stringify({ amount })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        triggerToast(data.message || "تم شحن البطاقة بنجاح!", "success");
+        setDirectRechargeAmount('');
+        // Refresh cards
+        const updatedRes = await fetch('/api/admin/cards', { headers: getHeaders() });
+        const updatedCards = await updatedRes.json();
+        if (Array.isArray(updatedCards)) {
+          setCards(updatedCards);
+          const freshCard = updatedCards.find(c => c.id === foundCard.id);
+          if (freshCard) setFoundCard(freshCard);
+        }
+        loadAdminData();
+      } else {
+        const err = await res.json();
+        triggerToast(err.message || "فشل شحن الرصيد.", "error");
+      }
+    } catch (err) {
+      triggerToast("خطأ أثناء الاتصال بالخادم الرئيسي.", "error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Direct Card Status Update (Active, Suspended, Blocked)
+  const handleDirectStatusUpdate = async (status: 'active' | 'suspended' | 'blocked') => {
+    if (!foundCard) return;
+    setSubmitting(true);
+    try {
+      const res = await fetch(`/api/admin/cards/${foundCard.id}/update-status`, {
+         method: 'POST',
+         headers: getHeaders(),
+         body: JSON.stringify({ status })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        triggerToast(data.message || "تم تحديث حالة البطاقة بنجاح.", "success");
+        // Refresh cards
+        const updatedRes = await fetch('/api/admin/cards', { headers: getHeaders() });
+        const updatedCards = await updatedRes.json();
+        if (Array.isArray(updatedCards)) {
+          setCards(updatedCards);
+          const freshCard = updatedCards.find(c => c.id === foundCard.id);
+          if (freshCard) setFoundCard(freshCard);
+        }
+        loadAdminData();
+      } else {
+        const err = await res.json();
+        triggerToast(err.message || "فشل تحديث الحالة.", "error");
+      }
+    } catch (err) {
+      triggerToast("خطأ أثناء الاتصال بالخادم الرئيسي.", "error");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -886,87 +991,262 @@ export default function AdminApp() {
             {activeTab === 'cards' && (
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 
-                {/* Part A: Create Card Form */}
-                <div className="lg:col-span-1 bg-slate-900/40 border border-slate-800/80 rounded-[32px] p-6 space-y-6 h-fit">
-                  <div>
-                    <h3 className="font-black text-sm text-white flex items-center gap-2">
-                      <CreditCard className="text-emerald-400 animate-pulse" size={16} />
-                      <span>تخصيص بطاقة جديدة للركاب</span>
-                    </h3>
-                    <p className="text-xs text-slate-500 mt-1">إنشاء بطاقة إلكترونية أو فيزيائية جديدة للمستخدمين برقمها التسلسلي</p>
-                  </div>
-
-                  <form onSubmit={handleCreateCard} className="space-y-4">
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] text-slate-400 font-bold block">الرقم التسلسلي الفريد للبطاقة (Serial Number)</label>
-                      <input 
-                        type="text" 
-                        required
-                        placeholder="مثال: 963283749201"
-                        value={newCardNumber}
-                        onChange={(e) => setNewCardNumber(e.target.value.replace(/\D/g, ''))}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white outline-none focus:border-emerald-500 font-mono"
-                      />
+                {/* Part A: Create Card Form & Card Quick Action Search */}
+                <div className="lg:col-span-1 space-y-6 h-fit">
+                  
+                  {/* Create Card Form */}
+                  <div className="bg-slate-900/40 border border-slate-800/80 rounded-[32px] p-6 space-y-6">
+                    <div>
+                      <h3 className="font-black text-sm text-white flex items-center gap-2">
+                        <CreditCard className="text-emerald-400 animate-pulse" size={16} />
+                        <span>تخصيص بطاقة جديدة للركاب</span>
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-1">إنشاء بطاقة إلكترونية أو فيزيائية جديدة للمستخدمين برقمها التسلسلي</p>
                     </div>
 
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] text-slate-400 font-bold block">الاسم المستعار للبطاقة (Alias Label)</label>
-                      <input 
-                        type="text" 
-                        required
-                        placeholder="مثال: محفظة الطالب الجامعي"
-                        value={newCardAlias}
-                        onChange={(e) => setNewCardAlias(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white outline-none focus:border-emerald-500"
-                      />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] text-slate-400 font-bold block">رقم هاتف الراكب المرتبط</label>
-                      <input 
-                        type="text" 
-                        required
-                        placeholder="مثال: 0991234567"
-                        value={newCardUserPhone}
-                        onChange={(e) => setNewCardUserPhone(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white outline-none focus:border-emerald-500 font-mono"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-4">
+                    <form onSubmit={handleCreateCard} className="space-y-4">
                       <div className="space-y-1.5">
-                        <label className="text-[10px] text-slate-400 font-bold block">نوع البطاقة</label>
-                        <select 
-                          value={newCardType}
-                          onChange={(e: any) => setNewCardType(e.target.value)}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white outline-none cursor-pointer"
-                        >
-                          <option value="digital">رقمية (تطبيق)</option>
-                          <option value="physical">فيزيائية (ملموسة)</option>
-                        </select>
-                      </div>
-
-                      <div className="space-y-1.5">
-                        <label className="text-[10px] text-slate-400 font-bold block">الرصيد الابتدائي (ل.س)</label>
+                        <label className="text-[10px] text-slate-400 font-bold block">الرقم التسلسلي الفريد للبطاقة (Serial Number)</label>
                         <input 
-                          type="number" 
+                          type="text" 
                           required
-                          value={newCardBalance}
-                          onChange={(e) => setNewCardBalance(e.target.value)}
+                          placeholder="مثال: 963283749201"
+                          value={newCardNumber}
+                          onChange={(e) => setNewCardNumber(e.target.value.replace(/\D/g, ''))}
                           className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white outline-none focus:border-emerald-500 font-mono"
                         />
                       </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] text-slate-400 font-bold block">الاسم المستعار للبطاقة (Alias Label)</label>
+                        <input 
+                          type="text" 
+                          required
+                          placeholder="مثال: محفظة الطالب الجامعي"
+                          value={newCardAlias}
+                          onChange={(e) => setNewCardAlias(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white outline-none focus:border-emerald-500"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] text-slate-400 font-bold block">رقم هاتف الراكب المرتبط</label>
+                        <input 
+                          type="text" 
+                          required
+                          placeholder="مثال: 0991234567"
+                          value={newCardUserPhone}
+                          onChange={(e) => setNewCardUserPhone(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white outline-none focus:border-emerald-500 font-mono"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] text-slate-400 font-bold block">نوع البطاقة</label>
+                          <select 
+                            value={newCardType}
+                            onChange={(e: any) => setNewCardType(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white outline-none cursor-pointer"
+                          >
+                            <option value="digital">رقمية (تطبيق)</option>
+                            <option value="physical">فيزيائية (ملموسة)</option>
+                          </select>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] text-slate-400 font-bold block">الرصيد الابتدائي (ل.س)</label>
+                          <input 
+                            type="number" 
+                            required
+                            value={newCardBalance}
+                            onChange={(e) => setNewCardBalance(e.target.value)}
+                            className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white outline-none focus:border-emerald-500 font-mono"
+                          />
+                        </div>
+                      </div>
+
+                      <button
+                        type="submit"
+                        disabled={submitting}
+                        className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-black py-3.5 rounded-xl text-xs transition flex items-center justify-center gap-2 mt-4"
+                      >
+                        {submitting ? <RefreshCw size={14} className="animate-spin" /> : <Plus size={14} />}
+                        <span>تخصيص وإطلاق البطاقة فوراً</span>
+                      </button>
+                    </form>
+                  </div>
+
+                  {/* Card Search & Quick Control Action Panel */}
+                  <div className="bg-slate-900/40 border border-slate-800/80 rounded-[32px] p-6 space-y-6">
+                    <div>
+                      <h3 className="font-black text-sm text-white flex items-center gap-2">
+                        <Search className="text-teal-400" size={16} />
+                        <span>البحث السريع والتحكم بالبطاقات</span>
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-1">ابحث عن بطاقة واشحن رصيدها أو جمّدها أو احظرها فوراً</p>
                     </div>
 
-                    <button
-                      type="submit"
-                      disabled={submitting}
-                      className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-black py-3.5 rounded-xl text-xs transition flex items-center justify-center gap-2 mt-4"
-                    >
-                      {submitting ? <RefreshCw size={14} className="animate-spin" /> : <Plus size={14} />}
-                      <span>تخصيص وإطلاق البطاقة فوراً</span>
-                    </button>
-                  </form>
+                    <form onSubmit={handleSearchCard} className="flex gap-2">
+                      <input 
+                        type="text" 
+                        placeholder="أدخل الرقم التسلسلي أو الاسم..."
+                        value={searchCardQuery}
+                        onChange={(e) => setSearchCardQuery(e.target.value)}
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white outline-none focus:border-teal-500 font-mono text-center"
+                      />
+                      <button 
+                        type="submit"
+                        className="bg-teal-600 hover:bg-teal-500 text-white font-black px-4 rounded-xl text-xs transition shrink-0"
+                      >
+                        بحث
+                      </button>
+                    </form>
+
+                    {foundCard ? (
+                      <div className="space-y-4 p-4 bg-slate-950/60 border border-slate-800/50 rounded-2xl animate-in fade-in duration-200">
+                        {/* Mini visual Card preview */}
+                        <div className="bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-800 p-4 rounded-xl relative overflow-hidden">
+                          <div className="absolute top-0 right-0 w-24 h-24 bg-teal-500/5 rounded-full blur-2xl"></div>
+                          <div className="flex justify-between items-start mb-4">
+                            <span className="text-[9px] font-bold text-slate-500 font-mono">CHAM CARD PRO</span>
+                            <span className={`px-2 py-0.5 rounded text-[8px] font-black ${
+                              foundCard.status === 'active' 
+                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                                : foundCard.status === 'suspended'
+                                  ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                                  : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                            }`}>
+                              {foundCard.status === 'active' ? 'نشطة وفعالة' : foundCard.status === 'suspended' ? 'موقوفة مؤقتاً' : 'مجمدة ومحظورة'}
+                            </span>
+                          </div>
+                          
+                          <div className="space-y-1">
+                            <h4 className="text-xs font-black text-white">{foundCard.alias}</h4>
+                            <p className="text-[10px] font-bold text-slate-400 font-mono tracking-wider">{foundCard.cardNumber}</p>
+                          </div>
+
+                          <div className="flex justify-between items-end mt-4 pt-3 border-t border-slate-900">
+                            <div>
+                              <span className="text-[8px] text-slate-500 block">الهاتف المرتبط</span>
+                              <span className="text-[10px] text-slate-300 font-mono">{foundCard.userId || 'غير مرتبط'}</span>
+                            </div>
+                            <div className="text-left">
+                              <span className="text-[8px] text-slate-500 block">الرصيد الحالي</span>
+                              <span className="text-xs font-black text-emerald-400 font-mono">{foundCard.balance.toLocaleString()} ل.س</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Recharge balance tool */}
+                        <form onSubmit={handleDirectRecharge} className="space-y-1.5 pt-2 border-t border-slate-900">
+                          <label className="text-[10px] text-slate-400 font-bold block">شحن رصيد البطاقة فوري (ل.س)</label>
+                          <div className="flex gap-2">
+                            <input 
+                              type="number" 
+                              required
+                              placeholder="مثال: 10000"
+                              value={directRechargeAmount}
+                              onChange={(e) => setDirectRechargeAmount(e.target.value)}
+                              className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-xs text-white outline-none focus:border-emerald-500 font-mono text-center"
+                            />
+                            <button
+                              type="submit"
+                              disabled={submitting}
+                              className="bg-emerald-600 hover:bg-emerald-500 text-white font-black px-4 rounded-xl text-[10px] transition shrink-0"
+                            >
+                              شحن
+                            </button>
+                          </div>
+                        </form>
+
+                        {/* Change status buttons */}
+                        <div className="space-y-2 pt-2 border-t border-slate-900">
+                          <label className="text-[10px] text-slate-400 font-bold block">إدارة الحالة والتحكم بالحظر</label>
+                          <div className="grid grid-cols-2 gap-2">
+                            {foundCard.status === 'active' ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDirectStatusUpdate('suspended')}
+                                  disabled={submitting}
+                                  className="bg-amber-950/40 hover:bg-amber-900/30 border border-amber-900/30 text-amber-400 p-2 rounded-xl text-[10px] font-black transition"
+                                >
+                                  توقيف مؤقت
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDirectStatusUpdate('blocked')}
+                                  disabled={submitting}
+                                  className="bg-red-950/40 hover:bg-red-900/30 border border-red-900/30 text-red-400 p-2 rounded-xl text-[10px] font-black transition"
+                                >
+                                  حظر كلي
+                                </button>
+                              </>
+                            ) : foundCard.status === 'suspended' ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDirectStatusUpdate('active')}
+                                  disabled={submitting}
+                                  className="bg-emerald-600 hover:bg-emerald-500 text-white p-2 rounded-xl text-[10px] font-black transition"
+                                >
+                                  تنشيط وتفعيل
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDirectStatusUpdate('blocked')}
+                                  disabled={submitting}
+                                  className="bg-red-950/40 hover:bg-red-900/30 border border-red-900/30 text-red-400 p-2 rounded-xl text-[10px] font-black transition"
+                                >
+                                  حظر كلي
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDirectStatusUpdate('active')}
+                                  disabled={submitting}
+                                  className="bg-emerald-600 hover:bg-emerald-500 text-white p-2 rounded-xl text-[10px] font-black transition"
+                                >
+                                  فك الحظر
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDirectStatusUpdate('suspended')}
+                                  disabled={submitting}
+                                  className="bg-amber-950/40 hover:bg-amber-900/30 border border-amber-900/30 text-amber-400 p-2 rounded-xl text-[10px] font-black transition"
+                                >
+                                  توقيف مؤقت
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Do nothing (Cancel) */}
+                        <div className="pt-2 border-t border-slate-900 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFoundCard(null);
+                              setSearchCardQuery('');
+                              triggerToast("تم إغلاق تفاصيل البطاقة.", "success");
+                            }}
+                            className="text-[10px] font-bold text-slate-500 hover:text-slate-300 transition"
+                          >
+                            إغلاق (لا تفعل شيء)
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-center p-6 border border-dashed border-slate-800 rounded-2xl text-slate-500 text-[11px]">
+                        لم يتم البحث عن بطاقة بعد. أدخل الرقم التسلسلي أو الاسم للتحكم بالبطاقة.
+                      </div>
+                    )}
+                  </div>
+
                 </div>
 
                 {/* Part B: Cards Grid and Monitor */}
@@ -1023,20 +1303,31 @@ export default function AdminApp() {
                               </td>
                               <td className="p-4 font-black text-white">{card.balance.toLocaleString()} ل.س</td>
                               <td className="p-4">
-                                <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${card.status === 'blocked' ? 'bg-red-500/10 text-red-400 border border-red-500/15' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/15'}`}>
-                                  {card.status === 'blocked' ? 'مجمدة ومحظورة' : 'فعالة ونشطة'}
+                                <span className={`px-2 py-0.5 rounded-full text-[9px] font-black ${
+                                  card.status === 'blocked' 
+                                    ? 'bg-red-500/10 text-red-400 border border-red-500/15' 
+                                    : card.status === 'suspended'
+                                      ? 'bg-amber-500/10 text-amber-400 border border-amber-500/15'
+                                      : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/15'
+                                }`}>
+                                  {card.status === 'blocked' 
+                                    ? 'مجمدة ومحظورة' 
+                                    : card.status === 'suspended'
+                                      ? 'موقوفة مؤقتاً'
+                                      : 'فعالة ونشطة'}
                                 </span>
                               </td>
                               <td className="p-4 text-center">
                                 <button
-                                  onClick={() => handleToggleBlock(card.id)}
-                                  className={`px-3 py-1.5 rounded-lg text-[10px] font-black transition-all ${
-                                    card.status === 'blocked' 
-                                      ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-md' 
-                                      : 'bg-red-950/40 hover:bg-red-900/30 text-red-400 border border-red-900/30'
-                                  }`}
+                                  onClick={() => {
+                                    setFoundCard(card);
+                                    setSearchCardQuery(card.cardNumber);
+                                    triggerToast(`تم تحميل تفاصيل ${card.alias} في لوحة التحكم السريع!`, "success");
+                                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                                  }}
+                                  className="px-3 py-1.5 rounded-lg text-[10px] font-black bg-teal-950/40 hover:bg-teal-900/30 text-teal-400 border border-teal-900/30 transition-all"
                                 >
-                                  {card.status === 'blocked' ? 'إلغاء التجميد' : 'تجميد وحظر البطاقة'}
+                                  إدارة وتحكم فوري
                                 </button>
                               </td>
                             </tr>

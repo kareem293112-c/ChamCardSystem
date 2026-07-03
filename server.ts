@@ -818,6 +818,72 @@ async function startServer() {
     }
   });
 
+  // Direct Recharge API for Admins
+  app.post("/api/admin/cards/:id/recharge", requireAdmin, async (req, res) => {
+    try {
+      const cardId = req.params.id as string;
+      const { amount } = req.body;
+      if (typeof amount !== 'number' || amount <= 0) {
+        return res.status(400).json({ message: "مبلغ الشحن غير صالح." });
+      }
+
+      const cardRef = db.collection('cards').doc(cardId);
+      const cardDoc = await cardRef.get();
+      if (!cardDoc.exists) {
+        return res.status(404).json({ message: "البطاقة المطلوبة غير موجودة." });
+      }
+
+      const cardData = cardDoc.data();
+      const currentBalance = Number(cardData?.balance || 0);
+      const newBalance = currentBalance + amount;
+
+      await cardRef.update({ balance: newBalance });
+
+      // Create a direct transaction record for history
+      const txId = "tx_admin_recharge_" + Math.random().toString(36).substr(2, 9);
+      const txObj = {
+        id: txId,
+        userId: cardData?.userId || "unknown",
+        cardId: cardId,
+        cardName: cardData?.alias || "بطاقة شام",
+        type: "recharge",
+        title: "شحن مباشر من الإدارة",
+        subtitle: "اعتماد مالي فوري",
+        amount: amount,
+        timestamp: Date.now()
+      };
+      await db.collection('transactions').doc(txId).set(txObj);
+
+      res.json({ success: true, newBalance, message: `تم شحن البطاقة بنجاح بمبلغ ${amount.toLocaleString()} ل.س` });
+    } catch (err) {
+      console.error("Direct recharge error:", err);
+      res.status(500).json({ message: "فشل شحن رصيد البطاقة سحابياً." });
+    }
+  });
+
+  // Direct Status Update API for Admins (Active, Suspended, Blocked)
+  app.post("/api/admin/cards/:id/update-status", requireAdmin, async (req, res) => {
+    try {
+      const cardId = req.params.id as string;
+      const { status } = req.body;
+      if (!['active', 'suspended', 'blocked'].includes(status)) {
+        return res.status(400).json({ message: "حالة البطاقة غير صالحة." });
+      }
+
+      const cardRef = db.collection('cards').doc(cardId);
+      const cardDoc = await cardRef.get();
+      if (!cardDoc.exists) {
+        return res.status(404).json({ message: "البطاقة المطلوبة غير موجودة." });
+      }
+
+      await cardRef.update({ status });
+      res.json({ success: true, status, message: "تم تحديث حالة البطاقة بنجاح سحابياً." });
+    } catch (err) {
+      console.error("Update status error:", err);
+      res.status(500).json({ message: "فشل تحديث حالة البطاقة سحابياً." });
+    }
+  });
+
   // --- Driver Trip Authentication & Status APIs ---
   app.post("/api/driver/login", async (req, res) => {
     try {
@@ -1244,8 +1310,9 @@ async function startServer() {
 
       const paymentId = "pm_" + Math.random().toString(36).substr(2, 9);
 
-      // Rule: Check if Card is Blocked/Frozen
-      if (cardData?.status === "blocked") {
+      // Rule: Check if Card is Blocked/Frozen/Suspended
+      if (cardData?.status === "blocked" || cardData?.status === "suspended") {
+        const isBlocked = cardData?.status === "blocked";
         // Log FAILED payment to bus_payments for driver realtime notification
         const failedObj = {
           id: paymentId,
@@ -1254,12 +1321,16 @@ async function startServer() {
           amount: ticketPrice,
           passengerName: passengerName,
           status: "failed",
-          errorReason: "البطاقة محظورة ومجمدة!",
+          errorReason: isBlocked ? "البطاقة محظورة وملغاة!" : "البطاقة موقوفة مؤقتاً!",
           timestamp: Date.now()
         };
         await db.collection('bus_payments').doc(paymentId).set(failedObj);
 
-        return res.status(400).json({ message: "هذه البطاقة مجمدة أو محظورة من قبل الإدارة!" });
+        return res.status(400).json({ 
+          message: isBlocked 
+            ? "هذه البطاقة محظورة وملغاة من قبل الإدارة!" 
+            : "هذه البطاقة موقوفة مؤقتاً (مجمدة) من قبل الإدارة!" 
+        });
       }
 
       const currentBalance = cardData?.balance || 0;
@@ -1705,6 +1776,14 @@ async function startServer() {
         }
 
         const cardData = cardDoc.data();
+        if (cardData && (cardData.status === "blocked" || cardData.status === "suspended")) {
+          results.push({ 
+            cardId, 
+            success: false, 
+            reason: cardData.status === "blocked" ? "البطاقة محظورة وملغاة" : "البطاقة موقوفة مؤقتاً" 
+          });
+          continue;
+        }
         const price = amount || ticketPrice;
 
         if (cardData.balance < price) {
