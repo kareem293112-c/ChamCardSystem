@@ -272,6 +272,28 @@ export default function AdminApp() {
     }
   };
 
+  // Helper for matching card numbers robustly across different space-formatting and RTL visual reversals
+  const matchCardNumber = (cardNumber: string, query: string): boolean => {
+    const cleanCard = cardNumber.replace(/\s+/g, '').toLowerCase();
+    const cleanQuery = query.replace(/\s+/g, '').toLowerCase();
+    if (cleanCard === cleanQuery || cleanCard.includes(cleanQuery) || cleanQuery.includes(cleanCard)) {
+      return true;
+    }
+    
+    // Split and reverse blocks to handle RTL visually-reversed inputs
+    const cardBlocks = cardNumber.trim().split(/\s+/);
+    const queryBlocks = query.trim().split(/\s+/);
+    
+    const revCard = [...cardBlocks].reverse().join('').toLowerCase();
+    const revQuery = [...queryBlocks].reverse().join('').toLowerCase();
+    
+    if (cleanCard === revQuery || revCard === cleanQuery || revCard === revQuery) {
+      return true;
+    }
+    
+    return false;
+  };
+
   // Search for Card directly in state
   const handleSearchCard = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -281,8 +303,7 @@ export default function AdminApp() {
     }
     const query = searchCardQuery.trim().toLowerCase();
     const matched = cards.find(c => 
-      c.cardNumber.toLowerCase() === query || 
-      c.cardNumber.toLowerCase().includes(query) || 
+      matchCardNumber(c.cardNumber, searchCardQuery) || 
       c.alias.toLowerCase().includes(query) ||
       (c.userId && c.userId.toLowerCase().includes(query))
     );
@@ -742,7 +763,7 @@ export default function AdminApp() {
   const filteredCards = cards.filter(card => {
     if (!searchQuery) return true;
     const query = searchQuery.toLowerCase();
-    return card.cardNumber.toLowerCase().includes(query) || 
+    return matchCardNumber(card.cardNumber, searchQuery) || 
            card.alias.toLowerCase().includes(query);
   });
 
