@@ -1027,7 +1027,7 @@ const App: React.FC = () => {
       default:
         return (
           <div className="space-y-6 pb-36">
-             <header className="px-6 pt-14 flex justify-between items-center">
+             <header className="px-6 pt-2 flex justify-between items-center">
                 <div className="flex items-center gap-4 text-right">
                    <img src={session?.user.avatar} className="w-12 h-12 rounded-2xl border-2 border-emerald-500 shadow-lg" alt="avatar" />
                    <div><h1 className="text-xl font-black dark:text-white">أهلاً، {session?.user.fullName.split(' ')[0]}</h1></div>
@@ -1142,7 +1142,7 @@ const App: React.FC = () => {
     return (
       <div className="w-full max-w-md mx-auto bg-slate-50 dark:bg-slate-950 min-h-screen relative overflow-hidden flex flex-col shadow-2xl" dir="rtl">
         {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-        <main className="flex-1 relative overflow-y-auto no-scrollbar pt-16">{renderView()}</main>
+        <main className="flex-1 relative overflow-y-auto no-scrollbar pt-4">{renderView()}</main>
         {['home', 'cards', 'offers', 'profile', 'qr_payment', 'transactions_history'].includes(activeView) && (
           <div className="fixed bottom-10 left-1/2 -translate-x-1/2 w-[92%] z-[100]">
             <nav className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-2xl p-2 rounded-[42px] shadow-xl flex justify-between items-center border border-white/40">
