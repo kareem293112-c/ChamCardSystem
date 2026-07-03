@@ -857,16 +857,33 @@ async function startServer() {
 
   // Serve Admin Pages (Fully Protected)
   app.get('/admin-login', (req, res) => {
+    console.log("Accessing /admin-login");
     res.sendFile(path.join(process.cwd(), 'admin-login.html'));
   });
 
   app.get('/admin', requireAdmin, async (req, res, next) => {
+    console.log("Accessing /admin");
     try {
       if (process.env.NODE_ENV !== "production") {
         const html = await vite.transformIndexHtml('/admin.html', fs.readFileSync(path.join(process.cwd(), 'admin.html'), 'utf-8'));
         res.status(200).set({ 'Content-Type': 'text/html' }).end(html);
       } else {
         res.sendFile(path.join(process.cwd(), 'dist/admin/admin.html'));
+      }
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Serve Driver Dashboard Page cleanly using the main client application
+  app.get('/driver', async (req, res, next) => {
+    console.log("Accessing /driver");
+    try {
+      if (process.env.NODE_ENV !== "production") {
+        const html = await vite.transformIndexHtml('/index.html', fs.readFileSync(path.join(process.cwd(), 'index.html'), 'utf-8'));
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(html);
+      } else {
+        res.sendFile(path.join(process.cwd(), 'dist/index.html'));
       }
     } catch (e) {
       next(e);
