@@ -32,6 +32,18 @@ import AdminApp from './AdminApp';
 // الصورة الأصلية التي قدمها المستخدم (الباركود مع الشعار مدمجين)
 const ORIGINAL_QR_IMAGE = "https://images2.imgbox.com/6c/f5/lYn1Qe4c_o.png";
 
+export function generateOfflineSignature(cardId: string, userId: string, timestamp: number): string {
+  const secret = 'sham_card_pro_offline_secret_2026_secure';
+  const rawData = `${cardId}:${userId}:${timestamp}:${secret}`;
+  let hash = 0;
+  for (let i = 0; i < rawData.length; i++) {
+    const char = rawData.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash |= 0; // Convert to 32bit integer
+  }
+  return "offline_" + Math.abs(hash).toString(16);
+}
+
 const App: React.FC = () => {
   const [session, setSession] = useState<AuthSession | null>(() => authStore.getSession());
   const [activeView, setActiveView] = useState<View>(() => {
@@ -1342,6 +1354,33 @@ const QrPaymentView: React.FC<{
     if (!selectedCardId) return;
     setLoadingQr(true);
     const session = authStore.getSession();
+
+    // Check offline state
+    const isOffline = !navigator.onLine;
+    if (isOffline) {
+      try {
+        const phone = session?.user?.phone || localStorage.getItem('user_phone') || "+963931112223";
+        const timestamp = Date.now();
+        const signature = generateOfflineSignature(selectedCardId, phone, timestamp);
+        const qrPayload = {
+          cardId: selectedCardId,
+          userId: phone,
+          timestamp,
+          signature,
+          isOffline: true
+        };
+        const qrToken = btoa(JSON.stringify(qrPayload));
+        setSignedQr(qrToken);
+        setQrCountdown(60);
+        setLoadingQr(false);
+        triggerToast("تم توليد رمز عبور آمن دون اتصال بالإنترنت", "success");
+      } catch (e) {
+        console.error("Local QR generation error:", e);
+        setLoadingQr(false);
+      }
+      return;
+    }
+
     fetch(`/api/cards/${selectedCardId}/signed-qr`, {
       headers: {
         'Authorization': `Bearer ${session?.token || ''}`
@@ -1357,8 +1396,26 @@ const QrPaymentView: React.FC<{
       setLoadingQr(false);
     })
     .catch(err => {
-      console.error(err);
-      triggerToast("فشل توليد الرمز الآمن للبطاقة", "error");
+      console.warn("Server QR fetch failed, falling back to offline generator:", err);
+      try {
+        const phone = session?.user?.phone || localStorage.getItem('user_phone') || "+963931112223";
+        const timestamp = Date.now();
+        const signature = generateOfflineSignature(selectedCardId, phone, timestamp);
+        const qrPayload = {
+          cardId: selectedCardId,
+          userId: phone,
+          timestamp,
+          signature,
+          isOffline: true
+        };
+        const qrToken = btoa(JSON.stringify(qrPayload));
+        setSignedQr(qrToken);
+        setQrCountdown(60);
+        triggerToast("تم توليد رمز عبور آمن (دون اتصال بالإنترنت)", "success");
+      } catch (e) {
+        console.error(e);
+        triggerToast("فشل توليد الرمز الآمن للبطاقة", "error");
+      }
       setLoadingQr(false);
     });
   };

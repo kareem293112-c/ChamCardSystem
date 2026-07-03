@@ -2,6 +2,18 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+
+export function generateOfflineSignature(cardId: string, userId: string, timestamp: number): string {
+  const secret = 'sham_card_pro_offline_secret_2026_secure';
+  const rawData = `${cardId}:${userId}:${timestamp}:${secret}`;
+  let hash = 0;
+  for (let i = 0; i < rawData.length; i++) {
+    const char = rawData.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash |= 0; // Convert to 32bit integer
+  }
+  return "offline_" + Math.abs(hash).toString(16);
+}
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { initializeApp } from 'firebase/app';
@@ -1376,11 +1388,22 @@ async function startServer() {
       }
 
       // 1. Validate signature
-      const secret = process.env.JWT_SECRET || 'sham_card_pro_ultra_secure_secret_key_2026';
-      const rawData = `${cardId}:${userId}:${timestamp}`;
-      const expectedSignature = crypto.createHmac('sha256', secret).update(rawData).digest('hex');
+      let isVerified = false;
+      if (signature && signature.startsWith("offline_")) {
+        const expectedOffline = generateOfflineSignature(cardId, userId, timestamp);
+        if (signature === expectedOffline) {
+          isVerified = true;
+        }
+      } else {
+        const secret = process.env.JWT_SECRET || 'sham_card_pro_ultra_secure_secret_key_2026';
+        const rawData = `${cardId}:${userId}:${timestamp}`;
+        const expectedSignature = crypto.createHmac('sha256', secret).update(rawData).digest('hex');
+        if (signature === expectedSignature) {
+          isVerified = true;
+        }
+      }
 
-      if (signature !== expectedSignature) {
+      if (!isVerified) {
         return res.status(403).json({ message: "فشل التحقق الرقمي! الرمز تم التلاعب به" });
       }
 
@@ -1617,6 +1640,119 @@ async function startServer() {
     } catch (err) {
       console.error("Simulation error:", err);
       res.status(500).json({ message: "فشل إنشاء دفعة محاكاة." });
+    }
+  });
+
+  // POST /api/driver/sync-offline-queue
+  app.post("/api/driver/sync-offline-queue", async (req, res) => {
+    try {
+      const { tripId, busId, queue } = req.body;
+      if (!Array.isArray(queue) || queue.length === 0) {
+        return res.status(400).json({ message: "طابور المزامنة فارغ أو غير صالح" });
+      }
+
+      let ticketPrice = 1000;
+      let busName = "باص دمشق السريع";
+      let routeCode = "M1";
+      let resolvedBusId = busId || "bus_M1";
+
+      if (tripId) {
+        const tripDoc = await db.collection('bus_trips').doc(tripId).get();
+        if (tripDoc.exists) {
+          const tripData = tripDoc.data();
+          ticketPrice = Number(tripData?.ticketPrice || 1000);
+          busName = tripData?.routeName || "باص دمشق السريع";
+          routeCode = tripData?.routeCode || "M1";
+          resolvedBusId = tripData?.routeId || busId || "bus_M1";
+        }
+      }
+
+      const results = [];
+
+      for (const item of queue) {
+        const { cardId, userId, timestamp, signature, amount } = item;
+        if (!cardId || !userId || !timestamp || !signature) {
+          results.push({ cardId, success: false, reason: "مكونات العملية مفقودة" });
+          continue;
+        }
+
+        // 1. Verify Signature
+        let isVerified = false;
+        if (signature.startsWith("offline_")) {
+          const expectedOffline = generateOfflineSignature(cardId, userId, timestamp);
+          if (signature === expectedOffline) {
+            isVerified = true;
+          }
+        } else {
+          const secret = process.env.JWT_SECRET || 'sham_card_pro_ultra_secure_secret_key_2026';
+          const rawData = `${cardId}:${userId}:${timestamp}`;
+          const expectedSignature = crypto.createHmac('sha256', secret).update(rawData).digest('hex');
+          if (signature === expectedSignature) {
+            isVerified = true;
+          }
+        }
+
+        if (!isVerified) {
+          results.push({ cardId, success: false, reason: "فشل التحقق من التوقيع الرقمي" });
+          continue;
+        }
+
+        // 2. Fetch Card Doc
+        const cardDoc = await db.collection('cards').doc(cardId).get();
+        if (!cardDoc.exists) {
+          results.push({ cardId, success: false, reason: "البطاقة غير موجودة" });
+          continue;
+        }
+
+        const cardData = cardDoc.data();
+        const price = amount || ticketPrice;
+
+        if (cardData.balance < price) {
+          results.push({ cardId, success: false, reason: "الرصيد غير كافٍ" });
+          continue;
+        }
+
+        // 3. Deduct & Create Tx
+        const newBalance = cardData.balance - price;
+        await db.collection('cards').doc(cardId).update({ balance: newBalance });
+
+        const txId = "tx_pay_" + Math.random().toString(36).substr(2, 9);
+        const txObj = {
+          id: txId,
+          userId: userId,
+          cardId: cardId,
+          cardName: cardData.alias || "بطاقة شام",
+          type: "pay",
+          title: `مزامنة تذكرة عبور - ${routeCode}`,
+          subtitle: busName,
+          amount: -price,
+          timestamp: timestamp || Date.now()
+        };
+        await db.collection('transactions').doc(txId).set(txObj);
+
+        const paymentId = "pm_" + Math.random().toString(36).substr(2, 9);
+        const userDoc = await db.collection('users').doc(userId).get();
+        const passengerName = userDoc.exists ? (userDoc.data()?.fullName || "راكب بطاقة رقمية") : "راكب بطاقة رقمية";
+
+        const paymentObj = {
+          id: paymentId,
+          busId: resolvedBusId,
+          tripId: tripId || "",
+          amount: price,
+          balanceLeft: newBalance,
+          passengerName: passengerName + " (مزامنة دون اتصال)",
+          status: "success",
+          timestamp: timestamp || Date.now()
+        };
+        await db.collection('bus_payments').doc(paymentId).set(paymentObj);
+
+        results.push({ cardId, success: true });
+      }
+
+      res.json({ success: true, results });
+    } catch (err) {
+      console.error("Sync offline queue error:", err);
+      res.status(500).json({ message: "فشل مزامنة تذاكر العبور دون اتصال" });
     }
   });
 

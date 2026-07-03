@@ -38,6 +38,58 @@ export const DriverDashboard: React.FC = () => {
   const [passengerTokenInput, setPassengerTokenInput] = useState<string>('');
   const [scanResultToast, setScanResultToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
+  // Bus Offline Queue State
+  const [offlineQueue, setOfflineQueue] = useState<any[]>(() => {
+    const saved = localStorage.getItem('pending_offline_trips');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('pending_offline_trips', JSON.stringify(offlineQueue));
+  }, [offlineQueue]);
+
+  const syncOfflineQueue = async () => {
+    if (offlineQueue.length === 0) return;
+    if (!navigator.onLine) return;
+
+    try {
+      const res = await fetch('/api/driver/sync-offline-queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tripId: activeTrip?.id,
+          busId: activeTrip?.routeId,
+          queue: offlineQueue
+        })
+      });
+
+      if (res.ok) {
+        setOfflineQueue([]);
+        setScanResultToast({ message: "تمت مزامنة جميع تذاكر العبور دون اتصال بنجاح سحابياً!", type: 'success' });
+        setTimeout(() => setScanResultToast(null), 4000);
+        fetchTripStatus();
+      }
+    } catch (err) {
+      console.warn("Failed to sync offline queue", err);
+    }
+  };
+
+  useEffect(() => {
+    if (isLoggedIn && activeTrip && offlineQueue.length > 0 && navigator.onLine) {
+      syncOfflineQueue();
+    }
+  }, [isLoggedIn, activeTrip, offlineQueue.length]);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      if (isLoggedIn && activeTrip && offlineQueue.length > 0) {
+        syncOfflineQueue();
+      }
+    };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, [isLoggedIn, activeTrip, offlineQueue]);
+
   const seenPaymentIdsRef = useRef<Set<string>>(new Set());
   const isFirstLoadRef = useRef<boolean>(true);
 
@@ -275,6 +327,62 @@ export const DriverDashboard: React.FC = () => {
       return;
     }
     setSimLoading(true);
+
+    const isOffline = !navigator.onLine;
+
+    if (isOffline) {
+      try {
+        const decoded = atob(token.trim());
+        const qrPayload = JSON.parse(decoded);
+        const { cardId, userId, timestamp, signature } = qrPayload;
+
+        if (!cardId || !userId || !timestamp || !signature) {
+          throw new Error("Missing token payload parts");
+        }
+
+        const now = Date.now();
+        // Allow up to 10 minutes drift for offline clocks
+        if (Math.abs(now - timestamp) > 600000) {
+          setScanResultToast({ message: "كود العبور قديم جداً أو تم التلاعب بالوقت للراكب", type: 'error' });
+          playFailureBuzzer();
+          setSimLoading(false);
+          return;
+        }
+
+        const ticketPrice = activeTrip.ticketPrice || 1000;
+        const localPayment = {
+          cardId,
+          userId,
+          timestamp,
+          signature,
+          amount: ticketPrice,
+          isOffline: true
+        };
+
+        setOfflineQueue(prev => [...prev, localPayment]);
+
+        setPassengerTokenInput('');
+        setScanResultToast({ message: "تم تسجيل التذكرة محلياً في طابور المزامنة للباص!", type: 'success' });
+        
+        setActiveFeedback({
+          status: 'success',
+          amount: ticketPrice,
+          passengerName: "عبور مؤقت (دون اتصال)",
+          balanceLeft: 0,
+          timestamp: now
+        });
+        playSuccessBeep();
+
+      } catch (e) {
+        setScanResultToast({ message: "رمز العبور غير صالح أو تالف", type: 'error' });
+        playFailureBuzzer();
+      } finally {
+        setSimLoading(false);
+        setTimeout(() => setScanResultToast(null), 5000);
+      }
+      return;
+    }
+
     try {
       const res = await fetch('/api/trips/pay-signed-qr', {
         method: 'POST',
@@ -290,12 +398,64 @@ export const DriverDashboard: React.FC = () => {
         setPassengerTokenInput('');
         setScanResultToast({ message: "تم التحقق من التوقيع الرقمي وصلاحية الوقت وخصم الرصيد بنجاح!", type: 'success' });
         fetchTripStatus();
+
+        setActiveFeedback({
+          status: 'success',
+          amount: data.amount || activeTrip.ticketPrice || 1000,
+          passengerName: data.passengerName || "راكب بطاقة رقمية",
+          balanceLeft: data.balance,
+          timestamp: Date.now()
+        });
+        playSuccessBeep();
       } else {
         setScanResultToast({ message: data.message || "فشل التحقق من الرمز الرقمي", type: 'error' });
+
+        setActiveFeedback({
+          status: 'failed',
+          amount: activeTrip.ticketPrice || 1000,
+          passengerName: "راكب مرفوض",
+          errorReason: data.message || "رصيد غير كافٍ أو بطاقة مجمدة",
+          timestamp: Date.now()
+        });
+        playFailureBuzzer();
       }
     } catch (err) {
-      console.error(err);
-      setScanResultToast({ message: "خطأ بالاتصال بالخادم", type: 'error' });
+      console.warn("Fetch failed, fallback to offline local queuing", err);
+      try {
+        const decoded = atob(token.trim());
+        const qrPayload = JSON.parse(decoded);
+        const { cardId, userId, timestamp, signature } = qrPayload;
+
+        if (!cardId || !userId || !timestamp || !signature) {
+          throw new Error("Missing token parts");
+        }
+
+        const ticketPrice = activeTrip.ticketPrice || 1000;
+        const localPayment = {
+          cardId,
+          userId,
+          timestamp,
+          signature,
+          amount: ticketPrice,
+          isOffline: true
+        };
+
+        setOfflineQueue(prev => [...prev, localPayment]);
+        setPassengerTokenInput('');
+        setScanResultToast({ message: "فشل الاتصال! تم تسجيل التذكرة محلياً في طابور المزامنة.", type: 'success' });
+
+        setActiveFeedback({
+          status: 'success',
+          amount: ticketPrice,
+          passengerName: "عبور مؤقت (دون اتصال)",
+          balanceLeft: 0,
+          timestamp: Date.now()
+        });
+        playSuccessBeep();
+      } catch (e) {
+        setScanResultToast({ message: "خطأ بالاتصال بالخادم ورمز العبور غير صالح", type: 'error' });
+        playFailureBuzzer();
+      }
     } finally {
       setSimLoading(false);
       setTimeout(() => setScanResultToast(null), 5000);
@@ -405,6 +565,21 @@ export const DriverDashboard: React.FC = () => {
                 )}
               </div>
             </div>
+
+            {offlineQueue.length > 0 && (
+              <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 text-amber-400 px-3 py-1.5 rounded-xl text-[10px] font-black animate-pulse">
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping animate-infinite"></span>
+                <span>بانتظار المزامنة: {offlineQueue.length} تذاكر</span>
+                {navigator.onLine && (
+                  <button 
+                    onClick={syncOfflineQueue}
+                    className="mr-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-extrabold px-2 py-0.5 rounded-md text-[9px] transition"
+                  >
+                    مزامنة الآن
+                  </button>
+                )}
+              </div>
+            )}
 
             <button
               onClick={handleLogout}
