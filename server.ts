@@ -659,6 +659,201 @@ async function startServer() {
     }
   });
 
+  // --- Admin Fleet & Trips APIs ---
+  app.post("/api/admin/fleet/create", requireAdmin, async (req, res) => {
+    try {
+      const { ownerName, plateNumber, routeId } = req.body;
+      if (!ownerName || !plateNumber || !routeId) {
+        return res.status(400).json({ message: "جميع المدخلات (اسم صاحب الباص، نمرة السيارة، والخط) مطلوبة." });
+      }
+
+      // Fetch route/bus details
+      const busDoc = await db.collection('buses').doc(routeId).get();
+      if (!busDoc.exists) {
+        return res.status(404).json({ message: "الخط المحدد غير موجود." });
+      }
+      const busData = busDoc.data();
+
+      // Generate trip credentials
+      // 16-digit random code
+      const tripCode = Array.from({ length: 16 }, () => Math.floor(Math.random() * 10)).join('');
+      // 10-digit random password
+      const password = Array.from({ length: 10 }, () => Math.floor(Math.random() * 10)).join('');
+
+      const tripId = "trip_" + Math.random().toString(36).substr(2, 9);
+      const newTrip = {
+        id: tripId,
+        tripCode,
+        password,
+        ownerName,
+        plateNumber,
+        routeId,
+        routeName: busData?.route_name || "خط باص نشط",
+        routeCode: busData?.route_code || "BUS",
+        ticketPrice: Number(busData?.ticket_price || 1000),
+        status: "active",
+        createdAt: Date.now()
+      };
+
+      await db.collection('bus_trips').doc(tripId).set(newTrip);
+
+      res.json({ success: true, trip: newTrip });
+    } catch (err) {
+      console.error("Fleet creation error:", err);
+      res.status(500).json({ message: "فشل إنشاء الرحلة الجديدة سحابياً." });
+    }
+  });
+
+  app.get("/api/admin/fleet/trips", requireAdmin, async (req, res) => {
+    try {
+      const tripsSnap = await db.collection('bus_trips').get();
+      const trips: any[] = [];
+      tripsSnap.forEach(doc => trips.push(doc.data()));
+      trips.sort((a, b) => b.createdAt - a.createdAt);
+      res.json(trips);
+    } catch (err) {
+      res.status(500).json({ message: "فشل جلب الرحلات المسجلة." });
+    }
+  });
+
+  // --- Admin Card Action APIs ---
+  app.post("/api/admin/cards/create", requireAdmin, async (req, res) => {
+    try {
+      const { alias, cardNumber, balance, type, themeColor, category, userPhone } = req.body;
+      if (!cardNumber || !userPhone) {
+        return res.status(400).json({ message: "رقم البطاقة (الرقم التسلسلي) ورقم هاتف المستخدم مطلوبان." });
+      }
+
+      // Check if user exists
+      const userDoc = await db.collection('users').doc(userPhone).get();
+      if (!userDoc.exists) {
+        return res.status(404).json({ message: "رقم هاتف المستخدم غير مسجل بالتطبيق بعد." });
+      }
+
+      const cardId = "card_" + Math.random().toString(36).substr(2, 9);
+      const cardObj = {
+        id: cardId,
+        userId: userPhone,
+        alias: alias || (type === 'digital' ? "بطاقة رقمية جديدة" : "بطاقة فيزيائية جديدة"),
+        cardNumber: cardNumber,
+        balance: Number(balance || 0),
+        type: type || "digital",
+        themeColor: themeColor || "emerald",
+        status: "active",
+        is_primary: false,
+        category: category || "general",
+        expiryDate: "2030-12-31"
+      };
+
+      await db.collection('cards').doc(cardId).set(cardObj);
+      res.json({ success: true, card: cardObj });
+    } catch (err) {
+      res.status(500).json({ message: "فشل إنشاء البطاقة سحابياً." });
+    }
+  });
+
+  app.post("/api/admin/cards/:id/toggle-block", requireAdmin, async (req, res) => {
+    try {
+      const cardId = req.params.id as string;
+      const cardRef = db.collection('cards').doc(cardId);
+      const cardDoc = await cardRef.get();
+      if (!cardDoc.exists) {
+        return res.status(404).json({ message: "البطاقة المطلوبة غير موجودة." });
+      }
+
+      const currentStatus = cardDoc.data()?.status || "active";
+      const nextStatus = currentStatus === "active" ? "blocked" : "active";
+      await cardRef.update({ status: nextStatus });
+
+      res.json({ success: true, status: nextStatus });
+    } catch (err) {
+      res.status(500).json({ message: "فشل تجميد/تفعيل البطاقة." });
+    }
+  });
+
+  // --- Driver Trip Authentication & Status APIs ---
+  app.post("/api/driver/login", async (req, res) => {
+    try {
+      const { tripCode, password } = req.body;
+      if (!tripCode || !password) {
+        return res.status(400).json({ message: "يرجى إدخال رمز الرحلة وكلمة المرور." });
+      }
+
+      const tripsSnap = await db.collection('bus_trips')
+        .where('tripCode', '==', tripCode)
+        .where('password', '==', password)
+        .get();
+
+      if (tripsSnap.empty) {
+        return res.status(401).json({ message: "رمز الرحلة أو كلمة السر غير مطابقة مع السحابة." });
+      }
+
+      let matchedTrip: any = null;
+      tripsSnap.forEach(doc => { matchedTrip = doc.data(); });
+
+      if (matchedTrip.status !== 'active') {
+        return res.status(400).json({ message: "هذه الرحلة مغلقة أو منتهية العمل مسبقاً." });
+      }
+
+      // Generate driver session token
+      const driverToken = `driver_token_${Buffer.from(matchedTrip.id + '||' + Date.now()).toString('base64')}`;
+      res.setHeader('Set-Cookie', `driver_token=${driverToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
+
+      res.json({ success: true, trip: matchedTrip, token: driverToken });
+    } catch (err) {
+      res.status(500).json({ message: "فشل مصادقة السائق." });
+    }
+  });
+
+  app.post("/api/driver/logout", async (req, res) => {
+    try {
+      const { tripId } = req.body;
+      if (!tripId) {
+        return res.status(400).json({ message: "معرف الرحلة مطلوب." });
+      }
+
+      // Deactivate the trip
+      await db.collection('bus_trips').doc(tripId).update({ status: 'completed' });
+
+      res.setHeader('Set-Cookie', 'driver_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ message: "فشل تسجيل خروج الرحلة." });
+    }
+  });
+
+  app.get("/api/driver/active-trip", async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      let driverToken = null;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        driverToken = authHeader.substring(7);
+      } else {
+        const cookieHeader = req.headers.cookie;
+        const match = cookieHeader?.match(/driver_token=driver_token_([a-zA-Z0-9+/=]+)/);
+        if (match) {
+          driverToken = match[1];
+        }
+      }
+
+      if (!driverToken) {
+        return res.status(401).json({ message: "لا توجد رحلة نشطة حالياً." });
+      }
+
+      const decoded = Buffer.from(driverToken, 'base64').toString('utf-8');
+      const tripId = decoded.split('||')[0];
+
+      const tripDoc = await db.collection('bus_trips').doc(tripId).get();
+      if (!tripDoc.exists) {
+        return res.status(404).json({ message: "تفاصيل الرحلة غير موجودة." });
+      }
+
+      res.json(tripDoc.data());
+    } catch (err) {
+      res.status(401).json({ message: "انتهت صلاحية جلسة العمل." });
+    }
+  });
+
   // Serve Admin Pages (Fully Protected)
   app.get('/admin-login', (req, res) => {
     res.sendFile(path.join(process.cwd(), 'admin-login.html'));
@@ -970,7 +1165,7 @@ async function startServer() {
       const phone = extractUserPhone(req);
       if (!phone) return res.status(401).json({ message: "غير مصرح" });
 
-      const { cardId, busId } = req.body;
+      const { cardId, busId, tripId } = req.body;
       if (!cardId) {
         return res.status(400).json({ message: "معرف البطاقة مطلوب للعملية." });
       }
@@ -987,11 +1182,31 @@ async function startServer() {
         return res.status(403).json({ message: "غير مصرح لك باستخدام هذه البطاقة." });
       }
 
-      // Fetch Bus
+      // Fetch Passenger Name for Driver simulator
+      const userDoc = await db.collection('users').doc(phone).get();
+      const passengerName = userDoc.exists ? (userDoc.data()?.fullName || "راكب") : "راكب";
+
+      // Resolve trip or bus details
       let ticketPrice = 1000;
       let busName = "باص دمشق السريع";
       let routeCode = "M1";
-      if (busId) {
+      let resolvedBusId = busId || "bus_M1";
+      let resolvedTripId = tripId || "";
+
+      if (tripId) {
+        const tripDoc = await db.collection('bus_trips').doc(tripId).get();
+        if (tripDoc.exists) {
+          const tripData = tripDoc.data();
+          if (tripData?.status !== 'active') {
+            return res.status(400).json({ message: "هذه الرحلة منتهية أو متوقفة حالياً." });
+          }
+          ticketPrice = Number(tripData?.ticketPrice || 1000);
+          busName = tripData?.routeName || "باص دمشق السريع";
+          routeCode = tripData?.routeCode || "M1";
+          resolvedBusId = tripData?.routeId || "bus_M1";
+          resolvedTripId = tripId;
+        }
+      } else if (busId) {
         const busDoc = await db.collection('buses').doc(busId).get();
         if (busDoc.exists) {
           const busData = busDoc.data();
@@ -1001,8 +1216,41 @@ async function startServer() {
         }
       }
 
+      const paymentId = "pm_" + Math.random().toString(36).substr(2, 9);
+
+      // Rule: Check if Card is Blocked/Frozen
+      if (cardData?.status === "blocked") {
+        // Log FAILED payment to bus_payments for driver realtime notification
+        const failedObj = {
+          id: paymentId,
+          busId: resolvedBusId,
+          tripId: resolvedTripId,
+          amount: ticketPrice,
+          passengerName: passengerName,
+          status: "failed",
+          errorReason: "البطاقة محظورة ومجمدة!",
+          timestamp: Date.now()
+        };
+        await db.collection('bus_payments').doc(paymentId).set(failedObj);
+
+        return res.status(400).json({ message: "هذه البطاقة مجمدة أو محظورة من قبل الإدارة!" });
+      }
+
       const currentBalance = cardData?.balance || 0;
       if (currentBalance < ticketPrice) {
+        // Log FAILED payment due to insufficient balance
+        const failedObj = {
+          id: paymentId,
+          busId: resolvedBusId,
+          tripId: resolvedTripId,
+          amount: ticketPrice,
+          passengerName: passengerName,
+          status: "failed",
+          errorReason: "الرصيد غير كافٍ!",
+          timestamp: Date.now()
+        };
+        await db.collection('bus_payments').doc(paymentId).set(failedObj);
+
         return res.status(400).json({ message: "رصيد البطاقة غير كافٍ لإتمام عملية العبور." });
       }
 
@@ -1024,17 +1272,15 @@ async function startServer() {
       };
       await db.collection('transactions').doc(txId).set(txObj);
 
-      // Get Passenger Name for Driver simulator
-      const userDoc = await db.collection('users').doc(phone).get();
-      const passengerName = userDoc.exists ? (userDoc.data()?.fullName || "راكب") : "راكب";
-
-      // Log payment to bus_payments collection for the driver screen
-      const paymentId = "pm_" + Math.random().toString(36).substr(2, 9);
+      // Log SUCCESS payment to bus_payments collection for the driver screen
       const paymentObj = {
         id: paymentId,
-        busId: busId || "bus_M1",
+        busId: resolvedBusId,
+        tripId: resolvedTripId,
         amount: ticketPrice,
+        balanceLeft: newBalance,
         passengerName: passengerName,
+        status: "success",
         timestamp: Date.now()
       };
       await db.collection('bus_payments').doc(paymentId).set(paymentObj);
@@ -1086,13 +1332,18 @@ async function startServer() {
   app.get("/api/driver/status", async (req, res) => {
     try {
       const busId = req.query.busId as string || "bus_M1";
+      const tripId = req.query.tripId as string || "";
       
       const startOfToday = new Date();
       startOfToday.setHours(0, 0, 0, 0);
       const startOfTodayTimestamp = startOfToday.getTime();
 
-      // Retrieve all payments of the requested bus in Firestore
-      const paymentsSnap = await db.collection('bus_payments').where('busId', '==', busId).get();
+      let paymentsSnap;
+      if (tripId) {
+        paymentsSnap = await db.collection('bus_payments').where('tripId', '==', tripId).get();
+      } else {
+        paymentsSnap = await db.collection('bus_payments').where('busId', '==', busId).get();
+      }
       
       let totalPassengersToday = 0;
       let totalRevenueToday = 0;
@@ -1101,8 +1352,10 @@ async function startServer() {
       paymentsSnap.forEach(doc => {
         const payment = doc.data();
         if (payment.timestamp >= startOfTodayTimestamp) {
-          totalPassengersToday += 1;
-          totalRevenueToday += Number(payment.amount || 0);
+          if (payment.status !== 'failed') {
+            totalPassengersToday += 1;
+            totalRevenueToday += Number(payment.amount || 0);
+          }
           recentPayments.push(payment);
         }
       });
@@ -1110,16 +1363,35 @@ async function startServer() {
       // Sort recent payments descending by timestamp
       recentPayments.sort((a, b) => b.timestamp - a.timestamp);
 
-      // Fetch Bus details
-      const busDoc = await db.collection('buses').doc(busId).get();
-      const busData = busDoc.exists ? busDoc.data() : { route_name: "ميكرو البرامكة - المزة جبل", route_code: "M1", ticket_price: 1000 };
+      // Fetch Bus/Trip details
+      let routeName = "ميكرو البرامكة - المزة جبل";
+      let routeCode = "M1";
+      let ticketPrice = 1000;
+
+      if (tripId) {
+        const tripDoc = await db.collection('bus_trips').doc(tripId).get();
+        if (tripDoc.exists) {
+          const tripData = tripDoc.data();
+          routeName = tripData?.routeName || routeName;
+          routeCode = tripData?.routeCode || routeCode;
+          ticketPrice = tripData?.ticketPrice || ticketPrice;
+        }
+      } else {
+        const busDoc = await db.collection('buses').doc(busId).get();
+        if (busDoc.exists) {
+          const busData = busDoc.data();
+          routeName = busData?.route_name || routeName;
+          routeCode = busData?.route_code || routeCode;
+          ticketPrice = busData?.ticket_price || ticketPrice;
+        }
+      }
 
       res.json({
         bus: {
           id: busId,
-          routeName: busData?.route_name,
-          routeCode: busData?.route_code,
-          ticketPrice: busData?.ticket_price
+          routeName,
+          routeCode,
+          ticketPrice
         },
         totalPassengersToday,
         totalRevenueToday,
@@ -1134,14 +1406,18 @@ async function startServer() {
   // Simulate passenger scan for driver simulator testing convenience
   app.post("/api/driver/simulate-scan", async (req, res) => {
     try {
-      const { busId, amount, passengerName } = req.body;
+      const { busId, amount, passengerName, tripId, status, errorReason, balanceLeft } = req.body;
       
       const paymentId = "pm_" + Math.random().toString(36).substr(2, 9);
       const paymentObj = {
         id: paymentId,
         busId: busId || "bus_M1",
+        tripId: tripId || "",
         amount: Number(amount || 1000),
+        balanceLeft: balanceLeft !== undefined ? Number(balanceLeft) : 5000,
         passengerName: passengerName || "راكب محاكى",
+        status: status || "success",
+        errorReason: errorReason || "",
         timestamp: Date.now()
       };
       

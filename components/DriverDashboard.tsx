@@ -1,55 +1,78 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Bus, Users, DollarSign, Volume2, VolumeX, Shield, Play, ArrowRight, Bell, Clock, RefreshCw } from 'lucide-react';
+import { Bus, Shield, Play, LogOut, AlertTriangle, CheckCircle, RefreshCw, Lock, Key, Info, ShieldCheck } from 'lucide-react';
 
 export const DriverDashboard: React.FC = () => {
-  const [buses, setBuses] = useState<any[]>([]);
-  const [selectedBusId, setSelectedBusId] = useState<string>('bus_M1');
-  const [status, setStatus] = useState<any>({
-    bus: { routeName: 'ميكرو البرامكة - المزة جبل', routeCode: 'M1', ticketPrice: 1000 },
+  // Authentication states
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
+  const [tripCode, setTripCode] = useState<string>('');
+  const [password, setPassword] = useState<string>('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState<boolean>(false);
+
+  // Active Trip states
+  const [activeTrip, setActiveTrip] = useState<any>(null);
+  const [tripStatus, setTripStatus] = useState<any>({
     totalPassengersToday: 0,
     totalRevenueToday: 0,
     recentPayments: []
   });
-  const [isAudioEnabled, setIsAudioEnabled] = useState<boolean>(true);
+
+  // UI/Feedback states
   const [isLiveActive, setIsLiveActive] = useState<boolean>(true);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isPolling, setIsPolling] = useState<boolean>(false);
   const [lastPaymentId, setLastPaymentId] = useState<string | null>(null);
-  const [activeAlert, setActiveAlert] = useState<{ amount: number; passengerName: string; timestamp: number } | null>(null);
+  const [activeFeedback, setActiveFeedback] = useState<{
+    status: 'success' | 'failed';
+    amount: number;
+    passengerName: string;
+    balanceLeft?: number;
+    errorReason?: string;
+    timestamp: number;
+  } | null>(null);
+
+  // Developer Simulation Panel state
+  const [showSimPanel, setShowSimPanel] = useState<boolean>(false);
+  const [simName, setSimName] = useState<string>('مجد الشامي');
+  const [simLoading, setSimLoading] = useState<boolean>(false);
 
   const seenPaymentIdsRef = useRef<Set<string>>(new Set());
   const isFirstLoadRef = useRef<boolean>(true);
 
-  // Load available buses
+  // Check if driver has an existing active session on mount
   useEffect(() => {
-    fetch('/api/buses/locations')
-      .then(res => res.json())
+    fetch('/api/driver/active-trip')
+      .then(res => {
+        if (res.ok) {
+          return res.json();
+        }
+        throw new Error("No active session");
+      })
       .then(data => {
-        if (Array.isArray(data) && data.length > 0) {
-          setBuses(data);
-          // Set initial selected bus if present
-          if (data.some(b => b.id === 'bus_M1')) {
-            setSelectedBusId('bus_M1');
-          } else {
-            setSelectedBusId(data[0].id);
-          }
+        if (data && data.status === 'active') {
+          setActiveTrip(data);
+          setIsLoggedIn(true);
         }
       })
-      .catch(err => console.error("Error loading buses", err));
+      .catch(() => {});
   }, []);
 
-  // Fetch driver status (polling)
-  const fetchStatus = () => {
-    if (!selectedBusId) return;
-    fetch(`/api/driver/status?busId=${selectedBusId}`)
-      .then(res => res.json())
+  // Fetch active trip status & transactions (polling)
+  const fetchTripStatus = () => {
+    if (!activeTrip) return;
+    setIsPolling(true);
+    fetch(`/api/driver/status?tripId=${activeTrip.id}&busId=${activeTrip.routeId}`)
+      .then(res => {
+        if (res.ok) return res.json();
+        throw new Error("Failed to load status");
+      })
       .then(data => {
-        setStatus(data);
+        setTripStatus(data);
 
-        // Check for new payments to trigger audio-visual alert
+        // Check for new payments to trigger audio-visual reaction
         if (data.recentPayments && data.recentPayments.length > 0) {
           const newest = data.recentPayments[0];
 
-          // If this is the first load, populate the seen payments list without triggering notifications
+          // On first load, populate seen payment IDs to avoid retroactive alerts
           if (isFirstLoadRef.current) {
             data.recentPayments.forEach((p: any) => seenPaymentIdsRef.current.add(p.id));
             isFirstLoadRef.current = false;
@@ -57,384 +80,463 @@ export const DriverDashboard: React.FC = () => {
             return;
           }
 
-          // Trigger alert if we haven't seen this payment ID before
+          // Trigger feedback if we haven't processed this payment ID before
           if (!seenPaymentIdsRef.current.has(newest.id)) {
             seenPaymentIdsRef.current.add(newest.id);
             setLastPaymentId(newest.id);
-            triggerAlert(newest);
+            triggerFeedback(newest);
           }
         } else {
           isFirstLoadRef.current = false;
         }
       })
-      .catch(err => console.error("Error loading driver status", err))
-      .finally(() => setIsLoading(false));
+      .catch(err => console.error("Error loading active trip status", err))
+      .finally(() => setIsPolling(false));
   };
 
-  // Poll server for updates
+  // Poll server for updates when logged in
   useEffect(() => {
-    fetchStatus();
-    isFirstLoadRef.current = true; // reset first load when bus selection changes
+    if (!isLoggedIn || !activeTrip) return;
+    
+    fetchTripStatus();
+    isFirstLoadRef.current = true;
     seenPaymentIdsRef.current.clear();
 
     const interval = setInterval(() => {
       if (isLiveActive) {
-        fetchStatus();
+        fetchTripStatus();
       }
     }, 1500);
 
     return () => clearInterval(interval);
-  }, [selectedBusId, isLiveActive]);
+  }, [isLoggedIn, activeTrip, isLiveActive]);
 
-  // Audio terminal beep synthesizer
-  const playTerminalBeep = () => {
-    if (!isAudioEnabled) return;
+  // Audio feedback synthesizers (Web Audio API)
+  const playSuccessBeep = () => {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(1450, audioCtx.currentTime); // Crisp electronic terminal beep
+      gainNode.gain.setValueAtTime(0.35, audioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+
+      osc.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.18);
+    } catch (e) {
+      console.warn("AudioContext success beep error", e);
+    }
+  };
+
+  const playFailureBuzzer = () => {
     try {
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       
-      // High-pitch dual-frequency terminal chip sound
-      const osc1 = audioCtx.createOscillator();
-      const osc2 = audioCtx.createOscillator();
-      const gainNode = audioCtx.createGain();
+      const playBuzz = (delay: number) => {
+        const osc = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(180, audioCtx.currentTime + delay); // Warning buzzer pitch
+        gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime + delay);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + delay + 0.25);
+        osc.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        osc.start(audioCtx.currentTime + delay);
+        osc.stop(audioCtx.currentTime + delay + 0.3);
+      };
 
-      osc1.type = 'sine';
-      osc1.frequency.setValueAtTime(1450, audioCtx.currentTime);
-      osc2.type = 'sine';
-      osc2.frequency.setValueAtTime(2900, audioCtx.currentTime); // overtone for crispness
-
-      gainNode.gain.setValueAtTime(0.25, audioCtx.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.18);
-
-      osc1.connect(gainNode);
-      osc2.connect(gainNode);
-      gainNode.connect(audioCtx.destination);
-
-      osc1.start();
-      osc2.start();
-      osc1.stop(audioCtx.currentTime + 0.2);
-      osc2.stop(audioCtx.currentTime + 0.2);
+      playBuzz(0);
+      playBuzz(0.15); // Double beep warning
     } catch (e) {
-      console.warn("Audio Context beep error", e);
+      console.warn("AudioContext failure buzzer error", e);
     }
   };
 
-  // Speech synthesis notification
-  const speakNotification = (passengerName: string, amount: number) => {
-    if (!isAudioEnabled) return;
-    try {
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel(); // Cancel any ongoing speech
-        const text = `تم دفع ${amount} ليرة سورية من الراكب ${passengerName}`;
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = 'ar-SA';
-        utterance.rate = 1.0;
-        utterance.pitch = 1.1;
-        window.speechSynthesis.speak(utterance);
-      }
-    } catch (e) {
-      console.warn("Speech synthesis error", e);
-    }
-  };
-
-  // Trigger alert sequence
-  const triggerAlert = (payment: any) => {
-    setActiveAlert({
+  // Trigger feedback overlay
+  const triggerFeedback = (payment: any) => {
+    setActiveFeedback({
+      status: payment.status === 'failed' ? 'failed' : 'success',
       amount: payment.amount,
       passengerName: payment.passengerName,
+      balanceLeft: payment.balanceLeft,
+      errorReason: payment.errorReason,
       timestamp: payment.timestamp
     });
 
-    playTerminalBeep();
-    
-    // Play sound and then speak after a brief 150ms delay
-    setTimeout(() => {
-      speakNotification(payment.passengerName, payment.amount);
-    }, 150);
+    if (payment.status === 'failed') {
+      playFailureBuzzer();
+    } else {
+      playSuccessBeep();
+    }
 
-    // Auto dismiss alert screen after 5 seconds
+    // Auto-dismiss after 4.5 seconds
     const timer = setTimeout(() => {
-      setActiveAlert(null);
-    }, 5500);
+      setActiveFeedback(null);
+    }, 4500);
 
     return () => clearTimeout(timer);
   };
 
-  // Manual trigger simulation helper for convenient testing right from the dashboard
-  const simulateLocalScan = async () => {
-    setIsLoading(true);
-    try {
-      const demoNames = [
-        "سليمان أحمد", "نور الهدى", "كرم المرعي", "ميسون حداد", 
-        "فادي العلي", "ريم الشامي", "باسل خوري", "زينب سليمان"
-      ];
-      const randomName = demoNames[Math.floor(Math.random() * demoNames.length)];
-      
-      const paymentId = "pm_sim_" + Math.random().toString(36).substr(2, 9);
-      const simulatedPayment = {
-        id: paymentId,
-        busId: selectedBusId,
-        amount: status.bus.ticketPrice || 1000,
-        passengerName: randomName,
-        timestamp: Date.now()
-      };
+  // Handle Driver login submission
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError(null);
+    setAuthLoading(true);
 
-      // We send simulated request to server or add locally then reload
-      // Let's create a special helper route in server OR directly post a payment to a mock API
-      // Since we already support real QR pay on the passenger site, let's create a simulator endpoint!
-      // This is incredibly robust!
-      const res = await fetch('/api/driver/simulate-scan', {
+    try {
+      const res = await fetch('/api/driver/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(simulatedPayment)
+        body: JSON.stringify({ tripCode: tripCode.trim(), password: password.trim() })
       });
-      
+
+      const data = await res.json();
       if (res.ok) {
-        fetchStatus();
+        setActiveTrip(data.trip);
+        setIsLoggedIn(true);
+      } else {
+        setAuthError(data.message || "خطأ في الاتصال بالخادم السحابي.");
       }
     } catch (err) {
-      console.error("Simulation failed", err);
+      setAuthError("فشل الاتصال بالإنترنت. يرجى مراجعة إعدادات الشبكة.");
     } finally {
-      setIsLoading(false);
+      setAuthLoading(false);
     }
   };
 
-  const selectedBus = buses.find(b => b.id === selectedBusId);
+  // Handle Trip Logout (Frees QR and deactivates trip)
+  const handleLogout = async () => {
+    if (!activeTrip) return;
+    try {
+      await fetch('/api/driver/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tripId: activeTrip.id })
+      });
+    } catch (err) {
+      console.warn("Failed to notify logout to backend", err);
+    }
 
+    // Reset state locally
+    setIsLoggedIn(false);
+    setActiveTrip(null);
+    setTripStatus({ totalPassengersToday: 0, totalRevenueToday: 0, recentPayments: [] });
+    setTripCode('');
+    setPassword('');
+    setLastPaymentId(null);
+    setActiveFeedback(null);
+  };
+
+  // Simulate passenger payment scan
+  const triggerSimulateScan = async (status: 'success' | 'failed', errorReason?: string) => {
+    if (!activeTrip) return;
+    setSimLoading(true);
+    try {
+      const payload = {
+        busId: activeTrip.routeId,
+        tripId: activeTrip.id,
+        amount: activeTrip.ticketPrice || 1000,
+        passengerName: simName.trim() || "راكب عشوائي",
+        status: status,
+        errorReason: errorReason || "",
+        balanceLeft: status === 'success' ? Math.floor(Math.random() * 50000) + 1500 : 0
+      };
+
+      const res = await fetch('/api/driver/simulate-scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        fetchTripStatus();
+      }
+    } catch (err) {
+      console.error("Simulation error", err);
+    } finally {
+      setSimLoading(false);
+    }
+  };
+
+  // Main UI Render
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans relative overflow-hidden" dir="rtl">
       
       {/* Background Matrix/Grid Overlay */}
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,#0f172a_1px,transparent_1px),linear-gradient(to_bottom,#0f172a_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)] opacity-25"></div>
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,#0f172a_1px,transparent_1px),linear-gradient(to_bottom,#0f172a_1px,transparent_1px)] bg-[size:4.5rem_4.5rem] opacity-20 pointer-events-none"></div>
 
-      {/* Driver HUD Header */}
-      <header className="relative z-10 border-b border-slate-900 bg-slate-950/80 backdrop-blur-md px-6 py-4 flex flex-wrap justify-between items-center gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center justify-center text-amber-400 shadow-[0_0_15px_rgba(245,158,11,0.15)]">
-            <Bus size={24} />
-          </div>
-          <div>
-            <span className="text-[10px] uppercase tracking-widest text-slate-500 font-bold block">شاشة حافلات شام كرت</span>
-            <h1 className="text-lg font-black text-white">محاكي لوحة السائق الذكية</h1>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          {/* Audio toggle */}
-          <button 
-            onClick={() => setIsAudioEnabled(!isAudioEnabled)}
-            className={`p-3 rounded-xl border transition-all flex items-center justify-center ${isAudioEnabled ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.1)]' : 'bg-slate-900 border-slate-800 text-slate-500'}`}
-            title={isAudioEnabled ? "الصوت مفعّل" : "الصوت مكتوم"}
-          >
-            {isAudioEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
-          </button>
-
-          {/* Connection status */}
-          <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-400">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span>بث حيّ متصل</span>
-          </div>
-
-          <a 
-            href="/"
-            className="flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-white px-4 py-2.5 rounded-xl border border-slate-800 text-xs font-bold transition-all"
-          >
-            <span>بوابة الركاب</span>
-            <ArrowRight size={14} className="rotate-180" />
-          </a>
-        </div>
-      </header>
-
-      {/* Main Grid Content */}
-      <main className="relative z-10 flex-1 p-6 max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-3 gap-6 pb-20">
-        
-        {/* Left Control Column */}
-        <section className="lg:col-span-1 space-y-6">
-          
-          {/* Bus Selector Card */}
-          <div className="bg-slate-900/40 border border-slate-900 backdrop-blur-md rounded-3xl p-6 shadow-sm">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-black text-slate-300">تخصيص شاشة الحافلة</h2>
-              <Clock className="text-amber-500" size={16} />
-            </div>
+      {/* Screen 1: Driver Authentication Gate */}
+      {!isLoggedIn ? (
+        <div className="min-h-screen flex items-center justify-center p-4 relative z-10">
+          <div className="w-full max-w-md bg-slate-900/60 border border-slate-800/80 backdrop-blur-xl rounded-[32px] p-8 shadow-2xl relative overflow-hidden">
+            <div className="absolute -top-10 -left-10 w-40 h-40 bg-emerald-500/15 rounded-full blur-3xl"></div>
             
-            <p className="text-xs text-slate-400 mb-4 leading-relaxed">
-              اختر الحافلة الحالية لمراقبة صعود الركاب والإيرادات بشكل مباشر. أي دفع عبر QR لهذه الحافلة سيصدر تنبيهاً فورياً هنا.
-            </p>
+            <div className="text-center space-y-4 mb-8">
+              <div className="w-16 h-16 bg-gradient-to-tr from-emerald-600 to-teal-500 rounded-2xl flex items-center justify-center mx-auto shadow-lg shadow-emerald-950/40">
+                <Bus size={32} className="text-white" />
+              </div>
+              <div>
+                <h1 className="text-xl font-black text-white">بطاقة الشام الرقمية</h1>
+                <p className="text-xs text-slate-400 mt-1">بوابة تفعيل رحلات السائقين والحافلات</p>
+              </div>
+            </div>
 
-            <div className="space-y-3">
-              <label className="text-[10px] font-black text-slate-500 block uppercase">الحافلة النشطة ومسارها</label>
-              <select 
-                value={selectedBusId}
-                onChange={(e) => {
-                  setSelectedBusId(e.target.value);
-                  setIsLoading(true);
-                }}
-                className="w-full p-4 bg-slate-950 border border-slate-800 focus:border-amber-500/50 rounded-2xl font-bold text-sm text-white outline-none transition-all cursor-pointer"
+            <form onSubmit={handleLogin} className="space-y-5">
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-400 block flex items-center gap-2">
+                  <Lock size={14} className="text-emerald-500" />
+                  <span>رمز الرحلة (16 رقم)</span>
+                </label>
+                <input 
+                  type="text" 
+                  maxLength={16}
+                  required
+                  placeholder="0000 0000 0000 0000"
+                  value={tripCode}
+                  onChange={(e) => setTripCode(e.target.value.replace(/\D/g, ''))}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-2xl p-4 text-center font-mono text-sm tracking-[0.15em] text-white outline-none transition-all placeholder:tracking-normal placeholder:text-slate-700"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-400 block flex items-center gap-2">
+                  <Key size={14} className="text-emerald-500" />
+                  <span>كلمة السر للرحلة (10 أرقام)</span>
+                </label>
+                <input 
+                  type="password" 
+                  maxLength={10}
+                  required
+                  placeholder="••••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value.replace(/\D/g, ''))}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-2xl p-4 text-center font-mono text-sm tracking-[0.25em] text-white outline-none transition-all placeholder:tracking-normal placeholder:text-slate-700"
+                />
+              </div>
+
+              {authError && (
+                <div className="bg-red-950/40 border border-red-500/20 text-red-400 text-xs font-bold p-4 rounded-2xl text-right flex items-start gap-2.5">
+                  <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+                  <span>{authError}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-black py-4 rounded-2xl text-xs transition duration-150 shadow-lg shadow-emerald-950/30 flex items-center justify-center gap-2"
               >
-                {buses.length > 0 ? buses.map(b => (
-                  <option key={b.id} value={b.id} className="bg-slate-950 text-white">
-                    {b.route_name} ({b.ticket_price} ل.س)
-                  </option>
-                )) : (
-                  <option value="bus_M1" className="bg-slate-950">ميكرو البرامكة - المزة جبل (1,000 ل.س)</option>
+                {authLoading ? (
+                  <RefreshCw size={16} className="animate-spin" />
+                ) : (
+                  <ShieldCheck size={16} />
                 )}
-              </select>
-            </div>
+                <span>تفعيل كود الرحلة والإقلاع</span>
+              </button>
+            </form>
 
-            <div className="mt-4 pt-4 border-t border-slate-900 flex justify-between text-xs text-slate-400">
-              <span>طول الخط / التعرفة:</span>
-              <span className="font-bold text-white">
-                {status.bus?.ticketPrice === 2500 ? 'خط طويل (2,500 ل.س)' : 'خط قصير (1,000 ل.س)'}
-              </span>
+            <div className="mt-8 pt-6 border-t border-slate-800/40 flex items-center gap-2 text-[10px] text-slate-500 font-semibold leading-relaxed">
+              <Info size={14} className="text-slate-400 shrink-0" />
+              <span>يتم توليد الرموز السرية من لوحة المشرفين بعد إدخال مواصفات الباص ونمرة السيارة لتوفير أقصى درجات الأمان ومحاربة التزوير.</span>
             </div>
           </div>
-
-          {/* Passenger Simulator Panel */}
-          <div className="bg-slate-900/40 border border-slate-900 backdrop-blur-md rounded-3xl p-6 shadow-sm relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-32 h-32 bg-amber-500/5 blur-3xl rounded-full"></div>
-            
-            <h2 className="text-sm font-black text-slate-300 mb-2 relative z-10">لوحة محاكاة الركاب والسكانر</h2>
-            <p className="text-xs text-slate-400 mb-4 leading-relaxed relative z-10">
-              لتسهيل التجربة دون الحاجة لجهازين، اضغط على زر المحاكاة أدناه لتوليد راكب عشوائي يقوم بمسح QR وصعود الباص فوراً.
-            </p>
+        </div>
+      ) : (
+        
+        /* Screen 2: Highly Polished Passenger Facing QR Terminal View */
+        <div className="min-h-screen flex flex-col justify-between p-6 relative z-10">
+          
+          {/* Top minimal status bar */}
+          <div className="flex justify-between items-center w-full max-w-2xl mx-auto">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex items-center justify-center text-emerald-400 shadow-sm">
+                <Bus size={20} />
+              </div>
+              <div className="text-right">
+                <span className="text-[10px] text-slate-400 font-bold block">{activeTrip.routeName}</span>
+                <span className="text-[9px] text-slate-500 font-semibold block">لوحة رقم: {activeTrip.plateNumber}</span>
+              </div>
+            </div>
 
             <button
-              onClick={simulateLocalScan}
-              disabled={isLoading}
-              className="w-full bg-gradient-to-r from-amber-600 to-amber-500 text-slate-950 font-black py-4 px-5 rounded-2xl shadow-xl hover:from-amber-500 hover:to-amber-400 active:scale-95 transition-all text-xs flex items-center justify-center gap-2 relative z-10 disabled:opacity-50"
+              onClick={handleLogout}
+              className="flex items-center gap-1.5 bg-red-950/20 hover:bg-red-900/30 border border-red-900/30 text-red-400 px-3.5 py-2 rounded-xl text-[10px] font-black transition active:scale-95"
             >
-              {isLoading ? (
-                <RefreshCw size={16} className="animate-spin" />
-              ) : (
-                <Play size={16} fill="currentColor" />
-              )}
-              <span>محاكاة صعود راكب جديد (Scan QR)</span>
+              <LogOut size={14} />
+              <span>إنهاء وتسجيل خروج من الرحلة</span>
             </button>
-            
-            <p className="text-[10px] text-slate-500 text-center mt-3">
-              يقوم باحتساب التعرفة ({status.bus?.ticketPrice || 1000} ل.س) ديناميكياً حسب نوع الخط المحدد.
-            </p>
           </div>
 
-        </section>
-
-        {/* Right Dashboard Counters & Payments */}
-        <section className="lg:col-span-2 space-y-6">
-          
-          {/* Quick HUD Counters */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            
-            {/* Passengers counter */}
-            <div className="bg-slate-900/50 border border-slate-900 rounded-3xl p-6 relative overflow-hidden flex items-center justify-between">
+          {/* Centered Beautiful QR Scan Card */}
+          <div className="my-auto flex flex-col items-center">
+            <div className="w-full max-w-sm bg-slate-900/40 border border-slate-800/80 rounded-[40px] p-8 shadow-2xl relative overflow-hidden text-center space-y-6">
+              
+              {/* Decorative side blurs */}
+              <div className="absolute -top-24 -right-24 w-48 h-48 bg-emerald-500/5 rounded-full blur-3xl"></div>
+              
               <div className="space-y-1">
-                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest block">إجمالي ركاب اليوم</span>
-                <span className="text-4xl font-black text-white font-sans tabular-nums block">
-                  {status.totalPassengersToday.toLocaleString()}
-                </span>
-                <span className="text-[10px] text-emerald-400 font-bold block">محدث تلقائياً قبل ثوانٍ</span>
+                <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest block">بطاقة الشام الرقمية</span>
+                <h2 className="text-2xl font-black text-white">ادفع تعرفة العبور هنا</h2>
+                <p className="text-[11px] text-slate-400">امسح كود الـ QR من تطبيقك لدفع تذكرة الركوب</p>
               </div>
-              <div className="w-16 h-16 bg-blue-500/10 rounded-full flex items-center justify-center text-blue-400">
-                <Users size={32} />
+
+              {/* Dynamic QR Code Container */}
+              <div className="bg-white p-5 rounded-[32px] w-fit mx-auto shadow-2xl border border-slate-800/20 relative">
+                <img 
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${activeTrip.id}`} 
+                  alt="Bus Trip QR Code" 
+                  className="w-48 h-48 object-contain"
+                />
+                
+                {/* Embedded Logo Badge in QR */}
+                <div className="absolute inset-0 m-auto w-10 h-10 bg-slate-950 rounded-xl border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-md">
+                  <Bus size={18} />
+                </div>
+              </div>
+
+              {/* Ticket Price HUD */}
+              <div className="bg-slate-950/80 rounded-2xl py-3 px-6 w-fit mx-auto border border-slate-800/60">
+                <span className="text-[10px] text-slate-500 block font-bold">تعرفة الركوب والعبور الموحدة</span>
+                <span className="text-lg font-black text-emerald-400">{(activeTrip.ticketPrice || 1000).toLocaleString()} ل.س</span>
+              </div>
+
+              <div className="text-[10px] text-slate-500 font-semibold flex items-center justify-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                <span>بوابة مسح سريعة نشطة آمنة</span>
               </div>
             </div>
-
-            {/* Revenue counter */}
-            <div className="bg-slate-900/50 border border-slate-900 rounded-3xl p-6 relative overflow-hidden flex items-center justify-between">
-              <div className="space-y-1">
-                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest block">إجمالي إيرادات اليوم</span>
-                <span className="text-4xl font-black text-amber-400 font-sans tabular-nums block">
-                  {status.totalRevenueToday.toLocaleString()}
-                </span>
-                <span className="text-[10px] text-slate-400 font-bold block">ليرة سورية (شام كاش)</span>
-              </div>
-              <div className="w-16 h-16 bg-amber-500/10 rounded-full flex items-center justify-center text-amber-400">
-                <DollarSign size={32} />
-              </div>
-            </div>
-
           </div>
 
-          {/* Recent Payments Board */}
-          <div className="bg-slate-900/40 border border-slate-900 backdrop-blur-md rounded-3xl p-6">
-            <h2 className="text-sm font-black text-slate-300 mb-4 flex items-center gap-2">
-              <Bell size={16} className="text-amber-500" />
-              <span>قائمة الركاب الصاعدين مؤخراً (البث الحيّ)</span>
-            </h2>
+          {/* Minimal Footnote / Developer Drawer Trigger */}
+          <div className="w-full max-w-2xl mx-auto flex justify-between items-center pt-4 border-t border-slate-900">
+            <span className="text-[10px] text-slate-600 font-medium">الجمهورية العربية السورية - منظومة النقل الداخلي الرقمية</span>
+            
+            <button 
+              onClick={() => setShowSimPanel(!showSimPanel)}
+              className="text-[9px] font-black text-slate-500 hover:text-amber-500 transition border border-slate-800 px-2.5 py-1 rounded-lg"
+            >
+              {showSimPanel ? 'إخفاء لوحة تجربة المطورين' : 'إظهار لوحة تجربة المطورين (المحاكي)'}
+            </button>
+          </div>
 
-            {status.recentPayments && status.recentPayments.length > 0 ? (
-              <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-                {status.recentPayments.map((p: any) => (
-                  <div 
-                    key={p.id}
-                    className="p-4 bg-slate-950 border border-slate-900 hover:border-slate-850 rounded-2xl flex items-center justify-between gap-4 transition-all"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-slate-900 rounded-xl flex items-center justify-center text-slate-400 border border-slate-850 text-xs font-black">
-                        QR
-                      </div>
-                      <div>
-                        <span className="font-bold text-sm text-white block">{p.passengerName}</span>
-                        <span className="text-[10px] text-slate-500 flex items-center gap-1 font-sans">
-                          {new Date(p.timestamp).toLocaleTimeString('ar-SY', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                        </span>
-                      </div>
-                    </div>
+          {/* Developer quick simulation panel (drawer) */}
+          {showSimPanel && (
+            <div className="w-full max-w-md mx-auto mt-6 bg-slate-900 border border-slate-800 p-5 rounded-2xl space-y-4">
+              <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                <h3 className="text-xs font-black text-amber-500">لوحة تجربة واختبار المطورين</h3>
+                <span className="text-[9px] text-slate-500">صممت لتسهيل تجربة الدفع والرد على شاشة واحدة</span>
+              </div>
 
-                    <div className="text-right">
-                      <span className="text-xs font-black text-emerald-400 block">+{p.amount.toLocaleString()} ل.س</span>
-                      <span className="text-[9px] text-slate-500 block">مدفوع ومؤكد</span>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2 space-y-1">
+                  <label className="text-[9px] font-black text-slate-400">اسم الراكب للتجربة</label>
+                  <input 
+                    type="text" 
+                    value={simName}
+                    onChange={(e) => setSimName(e.target.value)}
+                    placeholder="مثال: منير الأحمد"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-xs text-white outline-none focus:border-amber-500"
+                  />
+                </div>
+
+                <button 
+                  onClick={() => triggerSimulateScan('success')}
+                  disabled={simLoading}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white font-black py-2 rounded-lg text-[10px] transition"
+                >
+                  محاكاة: دفع ناجح (طوط)
+                </button>
+
+                <button 
+                  onClick={() => triggerSimulateScan('failed', 'الرصيد غير كافٍ!')}
+                  disabled={simLoading}
+                  className="bg-red-900 hover:bg-red-800 text-white font-black py-2 rounded-lg text-[10px] transition"
+                >
+                  محاكاة: رصيد غير كافٍ
+                </button>
+
+                <button 
+                  onClick={() => triggerSimulateScan('failed', 'البطاقة محظورة ومجمدة!')}
+                  disabled={simLoading}
+                  className="bg-red-950 hover:bg-red-900 text-red-400 font-black py-2 rounded-lg text-[10px] transition col-span-2"
+                >
+                  محاكاة: بطاقة مجمدة ومحظورة
+                </button>
+              </div>
+
+              <div className="flex justify-between text-[10px] text-slate-400 bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                <span>ركاب اليوم بالبث: <strong className="text-white">{tripStatus.totalPassengersToday}</strong></span>
+                <span>الإيراد التراكمي: <strong className="text-amber-400">{tripStatus.totalRevenueToday.toLocaleString()} ل.س</strong></span>
+              </div>
+            </div>
+          )}
+
+          {/* GIANT REAL-TIME AUDIO-VISUAL REACTION FEEDBACK OVERLAY */}
+          {activeFeedback && (
+            <div className={`fixed inset-0 z-50 flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-200 ${
+              activeFeedback.status === 'success' ? 'bg-emerald-950 text-white' : 'bg-red-950 text-white'
+            }`}>
+              
+              {/* Visual Ring Icons */}
+              {activeFeedback.status === 'success' ? (
+                <div className="mb-8 w-44 h-44 bg-emerald-500/10 border-4 border-emerald-400 rounded-full flex items-center justify-center shadow-[0_0_80px_rgba(16,185,129,0.3)] animate-bounce">
+                  <CheckCircle size={72} className="text-emerald-400" />
+                </div>
+              ) : (
+                <div className="mb-8 w-44 h-44 bg-red-500/10 border-4 border-red-500 rounded-full flex items-center justify-center shadow-[0_0_80px_rgba(239,68,68,0.3)] animate-bounce">
+                  <AlertTriangle size={72} className="text-red-400 animate-pulse" />
+                </div>
+              )}
+
+              {/* Status Header */}
+              {activeFeedback.status === 'success' ? (
+                <div className="space-y-4">
+                  <span className="bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 px-6 py-2 rounded-full text-xs font-black tracking-widest uppercase mb-4 animate-pulse">
+                    عملية دفع تذكرة ناجحة
+                  </span>
+                  <h2 className="text-4xl font-extrabold text-white">تم قبول العملية بنجاح</h2>
+                  
+                  <div className="text-5xl font-black my-6 text-emerald-300">
+                    - {activeFeedback.amount.toLocaleString()} ل.س
+                  </div>
+
+                  <div className="bg-slate-950/40 border border-emerald-500/15 rounded-3xl px-8 py-5 text-center max-w-sm mx-auto shadow-2xl">
+                    <span className="text-[11px] text-emerald-400 font-bold block mb-1">الراكب</span>
+                    <span className="text-2xl font-black text-white block mb-3">{activeFeedback.passengerName}</span>
+                    
+                    <div className="border-t border-emerald-500/10 pt-3 flex justify-between text-xs text-slate-300 font-black">
+                      <span>الرصيد المتبقي (الباقي):</span>
+                      <span className="font-mono text-emerald-400">{activeFeedback.balanceLeft?.toLocaleString() || '0'} ل.س</span>
                     </div>
                   </div>
-                ))}
-              </div>
-            ) : (
-              <div className="py-12 text-center text-slate-500 border-2 border-dashed border-slate-900 rounded-3xl">
-                <Users size={40} className="mx-auto mb-3 text-slate-700 animate-pulse" />
-                <p className="text-xs font-bold">لا يوجد صعود ركاب مسجل لليوم حتى الآن</p>
-                <p className="text-[10px] text-slate-600 mt-1">بانتظار مسح QR من أحد الركاب أو صعود محاكى</p>
-              </div>
-            )}
-          </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <span className="bg-red-500/20 border border-red-400/30 text-red-300 px-6 py-2 rounded-full text-xs font-black tracking-widest uppercase mb-4 animate-pulse">
+                    فشل خصم الأجرة
+                  </span>
+                  <h2 className="text-4xl font-extrabold text-white">العملية مرفوضة!</h2>
+                  
+                  <div className="text-2xl font-black text-red-300 bg-slate-950/40 border border-red-500/15 rounded-2xl py-3 px-6 my-4 w-fit mx-auto">
+                    {activeFeedback.errorReason || "رصيد غير كافٍ أو بطاقة محظورة"}
+                  </div>
 
-        </section>
+                  <div className="bg-slate-950/40 border border-red-500/15 rounded-3xl px-8 py-5 text-center max-w-sm mx-auto shadow-2xl">
+                    <span className="text-[11px] text-red-400 font-bold block mb-1">الراكب</span>
+                    <span className="text-xl font-black text-white">{activeFeedback.passengerName}</span>
+                  </div>
+                </div>
+              )}
 
-      </main>
-
-      {/* GIANT INSTANT DRIVER NOTIFICATION ALERT PORTAL */}
-      {activeAlert && (
-        <div className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-300">
-          
-          {/* Animated visual ring pulses */}
-          <div className="relative mb-10 w-48 h-48 bg-amber-500/10 border-2 border-amber-500/40 rounded-full flex items-center justify-center shadow-[0_0_80px_rgba(245,158,11,0.2)] animate-pulse">
-            <div className="absolute inset-4 bg-amber-500/20 rounded-full animate-ping opacity-30"></div>
-            <div className="w-24 h-24 bg-amber-500 rounded-[36px] flex items-center justify-center text-slate-950 shadow-2xl relative z-10">
-              <Bus size={48} className="animate-bounce" />
+              <p className="text-[10px] text-slate-400 font-semibold mt-10">شاشة العبور الموحدةFacing Terminal - شام كرت</p>
             </div>
-          </div>
+          )}
 
-          <span className="bg-amber-500/10 border border-amber-500/30 text-amber-400 px-5 py-2 rounded-full text-xs font-black tracking-widest uppercase mb-4 animate-pulse">
-            تم الدفع وتأكيد الصعود الآن
-          </span>
-
-          <h2 className="text-3xl font-black text-slate-400 mb-2">أجرة الحافلة مسجلة</h2>
-          
-          <div className="text-white text-5xl font-black mb-6 tracking-tight">
-            تم دفع <span className="text-amber-400">{activeAlert.amount.toLocaleString()}</span> ل.س
-          </div>
-
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl px-8 py-4 text-center max-w-md shadow-2xl mb-8">
-            <span className="text-[10px] text-slate-500 font-bold block uppercase mb-1">الراكب</span>
-            <span className="text-2xl font-black text-white">{activeAlert.passengerName}</span>
-          </div>
-
-          <p className="text-xs text-slate-500 font-medium">شاشة السائق الآلية - شام كرت دمشق</p>
-
-          <button 
-            onClick={() => setActiveAlert(null)}
-            className="mt-8 bg-slate-900 hover:bg-slate-850 text-slate-300 border border-slate-800 px-6 py-2.5 rounded-xl text-xs font-black transition-all"
-          >
-            إغلاق التنبيه
-          </button>
         </div>
       )}
 
