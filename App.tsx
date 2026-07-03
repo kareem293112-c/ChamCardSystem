@@ -7,6 +7,8 @@ import {
   Zap, Camera, CameraOff, Loader2, Info, Copy, Share2, Image as ImageIcon,
   CheckCircle, XCircle, Clock, ChevronLeft, Tag, Trash, Plus, Gift
 } from 'lucide-react';
+import { QRCodeCanvas } from 'qrcode.react';
+import { Html5QrcodeScanner } from 'html5-qrcode';
 import { View, Card, AuthSession, AppAction, SystemState, RechargeRequest, Transaction } from './types';
 import { authStore } from './store/authStore';
 import { rechargeService } from './services/rechargeService';
@@ -1122,10 +1124,10 @@ const App: React.FC = () => {
 
           {/* Dynamic QR to scan and continue on phone */}
           <div className="bg-white p-3 rounded-2xl w-fit mx-auto shadow-md">
-            <img 
-              src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(window.location.href)}`} 
-              alt="Scan to open on Mobile" 
-              className="w-28 h-28"
+            <QRCodeCanvas 
+              value={window.location.href} 
+              size={112}
+              level="H"
             />
           </div>
           <p className="text-[10px] text-slate-500 font-bold">
@@ -1439,6 +1441,7 @@ const QrPaymentView: React.FC<{
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const scannerRef = useRef<Html5QrcodeScanner | null>(null);
 
   // High-fidelity web audio scanner beep synthesizer (produces realistic physical transit device beep)
   const playPhysicalBeep = () => {
@@ -1461,19 +1464,88 @@ const QrPaymentView: React.FC<{
     }
   };
 
+  const handlePayment = async (data: string) => {
+    try {
+        console.log("Scanned QR data:", data);
+        const session = authStore.getSession();
+        const primaryCard = cards.find(c => c.is_primary);
+        const response = await fetch('/api/trips/pay-qr', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${session ? btoa(session.user.phone + '||' + Date.now()) : ''}`
+            },
+            body: JSON.stringify({ tripId: data, cardId: primaryCard?.id })
+        });
+        const result = await response.json();
+        if (result.success) {
+            playPhysicalBeep();
+            triggerToast("تم الدفع بنجاح!", 'success');
+        } else {
+            triggerToast(result.message || "فشل الدفع", 'error');
+        }
+    } catch (e) {
+        triggerToast("خطأ في الاتصال", 'error');
+    }
+  };
+
+  const startScanner = useCallback(() => {
+    setCameraState('loading');
+    const scanner = new Html5QrcodeScanner(
+      "qr-reader",
+      { fps: 10, qrbox: { width: 250, height: 250 } },
+      /* verbose= */ false
+    );
+    scanner.render(
+      (decodedText) => {
+        handlePayment(decodedText);
+        stopScanner();
+      },
+      (errorMessage) => {
+        // Handle error (often just QR not found)
+      }
+    );
+    scannerRef.current = scanner;
+    setCameraState('active');
+  }, []);
+
+  const stopScanner = useCallback(() => {
+    if (scannerRef.current) {
+        scannerRef.current.clear().then(() => {
+            scannerRef.current = null;
+            setCameraState('inactive');
+        }).catch(err => console.error("Error clearing scanner", err));
+    } else {
+        setCameraState('inactive');
+    }
+  }, []);
+
   const startCameraStream = async (facing: 'back' | 'front') => {
     setCameraState('loading');
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: facing === 'back' ? 'environment' : 'user',
-          width: { ideal: 480 },
-          height: { ideal: 480 }
-        }
-      });
+      // Try exact environment first
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { exact: 'environment' },
+            width: { ideal: 480 },
+            height: { ideal: 480 }
+          }
+        });
+      } catch (e) {
+        // Fallback
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: 'environment',
+            width: { ideal: 480 },
+            height: { ideal: 480 }
+          }
+        });
+      }
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -1488,13 +1560,9 @@ const QrPaymentView: React.FC<{
 
   useEffect(() => {
     if (payMode === 'scan') {
-      startCameraStream(activeCamera);
+      startScanner();
     } else {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
-      setCameraState('inactive');
+      stopScanner();
     }
 
     // Dynamic FPS oscillation for high realism
@@ -1849,12 +1917,13 @@ const QrPaymentView: React.FC<{
 
           {/* 100% REALISTIC QR SCANNER VIEWFINDER */}
           <div 
+            id="qr-reader"
+            className="relative mx-auto w-80 h-80 rounded-[44px] overflow-hidden border-2 border-emerald-500/90 shadow-[0_0_50px_rgba(16,185,129,0.3)] bg-slate-950 mb-6 flex flex-col justify-center items-center group cursor-pointer"
             onClick={() => {
               if (cameraState !== 'active') {
-                startCameraStream(activeCamera);
+                startScanner();
               }
             }}
-            className="relative mx-auto w-80 h-80 rounded-[44px] overflow-hidden border-2 border-emerald-500/90 shadow-[0_0_50px_rgba(16,185,129,0.3)] bg-slate-950 mb-6 flex flex-col justify-center items-center group cursor-pointer"
           >
             
             {/* Soft Ambient Core Pulse */}

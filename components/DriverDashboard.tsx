@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Bus, Shield, Play, LogOut, AlertTriangle, CheckCircle, RefreshCw, Lock, Key, Info, ShieldCheck } from 'lucide-react';
+import { QRCodeCanvas } from 'qrcode.react';
 
 export const DriverDashboard: React.FC = () => {
   // Authentication states
@@ -434,10 +435,14 @@ export const DriverDashboard: React.FC = () => {
 
               {/* Dynamic QR Code Container */}
               <div className="bg-white p-5 rounded-[32px] w-fit mx-auto shadow-2xl border border-slate-800/20 relative">
-                <img 
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=${activeTrip.id}`} 
-                  alt="Bus Trip QR Code" 
-                  className="w-48 h-48 object-contain"
+                <QRCodeCanvas 
+                  value={JSON.stringify({ 
+                    tripId: activeTrip.id,
+                    busId: activeTrip.routeId,
+                    timestamp: Date.now()
+                  })}
+                  size={192}
+                  level="H"
                 />
                 
                 {/* Embedded Logo Badge in QR */}
