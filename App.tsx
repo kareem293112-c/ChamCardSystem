@@ -12,6 +12,7 @@ import { Html5Qrcode } from 'html5-qrcode';
 import { View, Card, AuthSession, AppAction, SystemState, RechargeRequest, Transaction } from './types';
 import { authStore } from './store/authStore';
 import { rechargeService } from './services/rechargeService';
+import { offlineDb } from './services/offlineDb';
 
 import BalanceCard from './components/BalanceCard';
 import QuickActions from './components/QuickActions';
@@ -316,6 +317,8 @@ const App: React.FC = () => {
       if (data.user) {
         setSession(prev => prev ? { ...prev, user: { ...prev.user, ...data.user } } : null);
       }
+      // Save carbon copy to IndexedDB
+      offlineDb.set('dashboard_data', data).catch(err => console.warn("Failed caching dashboard", err));
     })
     .catch(err => {
       console.error("Error fetching dashboard:", err);
@@ -333,6 +336,8 @@ const App: React.FC = () => {
       .then(data => {
         if (Array.isArray(data)) {
           setOffers(data);
+          // Save carbon copy to IndexedDB
+          offlineDb.set('offers_data', data).catch(err => console.warn("Failed caching offers", err));
         }
         setLoadingOffers(false);
       })
@@ -340,6 +345,35 @@ const App: React.FC = () => {
         console.error("Error loading offers:", err);
         setLoadingOffers(false);
       });
+  }, []);
+
+  // Hydrate states from IndexedDB offline storage at boot time
+  useEffect(() => {
+    offlineDb.init().then(() => {
+      offlineDb.get('dashboard_data').then(cached => {
+        if (cached) {
+          console.log("Hydrated dashboard from IndexedDB:", cached);
+          if (cached.cards && cached.cards.length > 0) {
+            setCards(cached.cards);
+          }
+          if (cached.transactions) {
+            setTransactions(cached.transactions);
+          }
+          if (cached.user && session) {
+            setSession(prev => prev ? { ...prev, user: { ...prev.user, ...cached.user } } : null);
+          }
+        }
+      }).catch(e => console.warn(e));
+
+      offlineDb.get('offers_data').then(cachedOffers => {
+        if (Array.isArray(cachedOffers)) {
+          console.log("Hydrated offers from IndexedDB:", cachedOffers);
+          setOffers(cachedOffers);
+        }
+      }).catch(e => console.warn(e));
+    }).catch(err => {
+      console.warn("Could not initialize IndexedDB on start", err);
+    });
   }, []);
 
   useEffect(() => {

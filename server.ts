@@ -1842,6 +1842,11 @@ async function startServer() {
   });
 
   // Explicit Front-end Routes
+  app.get('/service-worker.js', (req, res) => {
+    res.setHeader('Content-Type', 'application/javascript');
+    res.sendFile(path.join(process.cwd(), 'service-worker.js'));
+  });
+
   app.get('/admin-login', (req, res) => {
     res.sendFile(path.join(process.cwd(), 'admin-login.html'));
   });
