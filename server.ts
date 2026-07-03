@@ -124,27 +124,15 @@ function extractUserPhone(req: express.Request): string | null {
 async function seedDatabase() {
   try {
     const usersRef = db.collection('users');
-    const snapshot = await usersRef.limit(1).get();
-    if (snapshot.empty) {
-      console.log("Seeding Firestore database with default Sham Card data...");
-      
-      // 1. Seed default user
-      const defaultUser = {
-        fullName: "أحمد سليمان",
-        phone: "+963931112223",
-        password: "123456",
-        isVerified: true,
-        nationalId: "01020304050",
-        avatar: "https://ui-avatars.com/api/?name=%D8%A3%D8%AD%D9%85%D8%AF+%D8%B3%D9%84%D9%8A%D9%85%D8%A7%D9%86&background=059669&color=fff",
-        theme: "light",
-        createdAt: Date.now()
-      };
-      await usersRef.doc(defaultUser.phone).set(defaultUser);
-
-      // 2. Seed admin user
+    
+    // Always ensure the default admin user exists
+    const adminPhone = "+963944444444";
+    const adminDoc = await usersRef.doc(adminPhone).get();
+    if (!adminDoc.exists) {
+      console.log("Seeding admin user into Firestore...");
       const adminUser = {
         fullName: "مسؤول النظام",
-        phone: "+963944444444",
+        phone: adminPhone,
         password: "123456",
         isVerified: true,
         nationalId: "99999999999",
@@ -152,12 +140,35 @@ async function seedDatabase() {
         theme: "light",
         createdAt: Date.now()
       };
-      await usersRef.doc(adminUser.phone).set(adminUser);
+      await usersRef.doc(adminPhone).set(adminUser);
+    }
 
-      // 3. Seed default card
+    // Always ensure the default user exists
+    const defaultUserPhone = "+963931112223";
+    const defaultUserDoc = await usersRef.doc(defaultUserPhone).get();
+    if (!defaultUserDoc.exists) {
+      console.log("Seeding default passenger user into Firestore...");
+      const defaultUser = {
+        fullName: "أحمد سليمان",
+        phone: defaultUserPhone,
+        password: "123456",
+        isVerified: true,
+        nationalId: "01020304050",
+        avatar: "https://ui-avatars.com/api/?name=%D8%A3%D8%AD%D9%85%D8%AF+%D8%B3%D9%84%D9%8A%D9%85%D8%A7%D9%85&background=059669&color=fff",
+        theme: "light",
+        createdAt: Date.now()
+      };
+      await usersRef.doc(defaultUserPhone).set(defaultUser);
+    }
+
+    // Always ensure the default card exists
+    const defaultCardId = "card_1";
+    const defaultCardDoc = await db.collection('cards').doc(defaultCardId).get();
+    if (!defaultCardDoc.exists) {
+      console.log("Seeding default card into Firestore...");
       const defaultCard = {
-        id: "card_1",
-        userId: "+963931112223",
+        id: defaultCardId,
+        userId: defaultUserPhone,
         alias: "بطاقتي الشخصية",
         cardNumber: "9630 1122 3344 8822",
         balance: 45200,
@@ -168,9 +179,13 @@ async function seedDatabase() {
         category: "general",
         expiryDate: "2030-12-31"
       };
-      await db.collection('cards').doc(defaultCard.id).set(defaultCard);
+      await db.collection('cards').doc(defaultCardId).set(defaultCard);
+    }
 
-      // 4. Seed buses
+    // Ensure buses are seeded
+    const busesSnap = await db.collection('buses').limit(1).get();
+    if (busesSnap.empty) {
+      console.log("Seeding buses into Firestore...");
       const buses = [
         {
           id: "bus_M1",
@@ -211,13 +226,17 @@ async function seedDatabase() {
       for (const bus of buses) {
         await db.collection('buses').doc(bus.id).set(bus);
       }
+    }
 
-      // 5. Seed default transactions
+    // Ensure transactions are seeded if none exist
+    const txSnap = await db.collection('transactions').limit(1).get();
+    if (txSnap.empty) {
+      console.log("Seeding default transactions into Firestore...");
       const transactions = [
         {
           id: "tx_1",
-          userId: "+963931112223",
-          cardId: "card_1",
+          userId: defaultUserPhone,
+          cardId: defaultCardId,
           cardName: "بطاقتي الشخصية",
           type: "recharge",
           title: "شحن رصيد - شام كاش",
@@ -227,8 +246,8 @@ async function seedDatabase() {
         },
         {
           id: "tx_2",
-          userId: "+963931112223",
-          cardId: "card_1",
+          userId: defaultUserPhone,
+          cardId: defaultCardId,
           cardName: "بطاقتي الشخصية",
           type: "pay",
           title: "باص البرامكة - خط M1",
@@ -238,8 +257,8 @@ async function seedDatabase() {
         },
         {
           id: "tx_3",
-          userId: "+963931112223",
-          cardId: "card_1",
+          userId: defaultUserPhone,
+          cardId: defaultCardId,
           cardName: "بطاقتي الشخصية",
           type: "pay",
           title: "باص كراجات السيدة زينب",
@@ -251,9 +270,9 @@ async function seedDatabase() {
       for (const tx of transactions) {
         await db.collection('transactions').doc(tx.id).set(tx);
       }
-      
-      console.log("Firestore seeding completed successfully.");
     }
+    
+    console.log("Firestore database integrity verified & essential seeding complete.");
   } catch (error) {
     console.error("Error seeding database:", error);
   }
@@ -313,17 +332,34 @@ async function startServer() {
   // Secure Admin Login API (sets HTTP-only cookie)
   app.post("/api/admin/login", async (req, res) => {
     try {
-      const { phone, password } = req.body;
+      let { phone, password } = req.body;
       if (!phone || !password) {
         return res.status(400).json({ message: "يرجى إدخال رقم الهاتف وكلمة المرور." });
       }
 
-      if (!phone.endsWith('4444')) {
+      phone = phone.trim();
+
+      // Normalize phone format for easier login in development
+      let searchPhone = phone;
+      if (searchPhone.startsWith('09') && searchPhone.length === 10) {
+        searchPhone = '+963' + searchPhone.substring(1);
+      } else if (searchPhone.startsWith('9') && searchPhone.length === 9) {
+        searchPhone = '+963' + searchPhone;
+      }
+
+      if (!searchPhone.endsWith('4444')) {
         return res.status(403).json({ message: "هذه البوابة مخصصة لمسؤولي النظام فقط." });
       }
 
-      const userDocRef = db.collection('users').doc(phone);
-      const userDoc = await userDocRef.get();
+      // Try searching with normalized phone first, then original input if not found
+      let userDocRef = db.collection('users').doc(searchPhone);
+      let userDoc = await userDocRef.get();
+      
+      if (!userDoc.exists && searchPhone !== phone) {
+        userDocRef = db.collection('users').doc(phone);
+        userDoc = await userDocRef.get();
+      }
+
       if (!userDoc.exists) {
         return res.status(401).json({ message: "رقم المشرف غير صحيح أو الحساب غير نشط." });
       }
@@ -333,12 +369,15 @@ async function startServer() {
         return res.status(401).json({ message: "رقم الهاتف أو كلمة المرور غير صحيحة." });
       }
 
-      const token = `pilot_token_${Buffer.from(phone + '||' + Date.now()).toString('base64')}`;
+      // Generate secure token with the matched document ID phone
+      const matchedPhone = userDoc.id;
+      const token = `pilot_token_${Buffer.from(matchedPhone + '||' + Date.now()).toString('base64')}`;
       
       // Set secure HTTP-only cookie
       res.setHeader('Set-Cookie', `admin_token=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
       res.json({ token, role: 'admin', user: userData });
     } catch (err) {
+      console.error("Admin Login Error:", err);
       res.status(500).json({ message: "فشل الدخول للمخدم الآمن." });
     }
   });
@@ -349,9 +388,9 @@ async function startServer() {
       const phone = extractUserPhone(req);
       if (!phone) return res.status(401).json({ message: "غير مصرح" });
 
-      const { amount, receiptImage, userName } = req.body;
-      if (!amount || !receiptImage) {
-        return res.status(400).json({ message: "الرجاء تحديد القيمة وصورة الإيصال." });
+      const { amount, receiptImage, paymentMethod, userName } = req.body;
+      if (!amount) {
+        return res.status(400).json({ message: "الرجاء تحديد قيمة الشحن المطلوبة." });
       }
 
       const id = "req_" + Math.random().toString(36).substr(2, 9);
@@ -360,7 +399,8 @@ async function startServer() {
         userId: phone,
         userName: userName || "مستخدم بطاقة",
         amount: Number(amount),
-        receiptImage,
+        receiptImage: receiptImage || 'none',
+        paymentMethod: paymentMethod || 'Syriatel Cash',
         status: "pending",
         timestamp: Date.now()
       };
@@ -664,17 +704,10 @@ async function startServer() {
   // --- Admin Fleet & Trips APIs ---
   app.post("/api/admin/fleet/create", requireAdmin, async (req, res) => {
     try {
-      const { ownerName, plateNumber, routeId } = req.body;
-      if (!ownerName || !plateNumber || !routeId) {
-        return res.status(400).json({ message: "جميع المدخلات (اسم صاحب الباص، نمرة السيارة، والخط) مطلوبة." });
+      const { ownerName, plateNumber, routeName, routeCode, ticketPrice } = req.body;
+      if (!ownerName || !plateNumber || !routeName || !routeCode || ticketPrice === undefined) {
+        return res.status(400).json({ message: "جميع المدخلات (اسم صاحب الباص، نمرة السيارة، اسم خط النقل والمسار، نوع واسطة النقل، والتعرفة) مطلوبة." });
       }
-
-      // Fetch route/bus details
-      const busDoc = await db.collection('buses').doc(routeId).get();
-      if (!busDoc.exists) {
-        return res.status(404).json({ message: "الخط المحدد غير موجود." });
-      }
-      const busData = busDoc.data();
 
       // Generate trip credentials
       // 16-digit random code
@@ -689,10 +722,10 @@ async function startServer() {
         password,
         ownerName,
         plateNumber,
-        routeId,
-        routeName: busData?.route_name || "خط باص نشط",
-        routeCode: busData?.route_code || "BUS",
-        ticketPrice: Number(busData?.ticket_price || 1000),
+        routeId: "custom_" + tripId,
+        routeName,
+        routeCode,
+        ticketPrice: Number(ticketPrice),
         status: "active",
         createdAt: Date.now()
       };
@@ -1372,13 +1405,37 @@ async function startServer() {
       }
 
       // Validate bus details
-      const targetBusId = busId || "bus_M1";
-      const busDoc = await db.collection('buses').doc(targetBusId).get();
-      if (!busDoc.exists) {
-        return res.status(404).json({ message: "الحافلة غير مسجلة" });
+      let ticketPrice = 1000;
+      let busName = "باص دمشق السريع";
+      let routeCode = "M1";
+      let resolvedBusId = busId || "bus_M1";
+
+      if (tripId) {
+        const tripDoc = await db.collection('bus_trips').doc(tripId).get();
+        if (tripDoc.exists) {
+          const tripData = tripDoc.data();
+          ticketPrice = Number(tripData?.ticketPrice || 1000);
+          busName = tripData?.routeName || "باص دمشق السريع";
+          routeCode = tripData?.routeCode || "M1";
+          resolvedBusId = tripData?.routeId || busId || "bus_M1";
+        } else {
+          const busDoc = await db.collection('buses').doc(resolvedBusId).get();
+          if (busDoc.exists) {
+            const busData = busDoc.data();
+            ticketPrice = busData?.ticket_price || 1000;
+            busName = busData?.route_name || "باص دمشق السريع";
+            routeCode = busData?.route_code || "M1";
+          }
+        }
+      } else {
+        const busDoc = await db.collection('buses').doc(resolvedBusId).get();
+        if (busDoc.exists) {
+          const busData = busDoc.data();
+          ticketPrice = busData?.ticket_price || 1000;
+          busName = busData?.route_name || "باص دمشق السريع";
+          routeCode = busData?.route_code || "M1";
+        }
       }
-      const busData = busDoc.data();
-      const ticketPrice = busData.ticket_price || 1000;
 
       // Validate sufficient balance
       if (cardData.balance < ticketPrice) {
@@ -1397,8 +1454,8 @@ async function startServer() {
         cardId: cardId,
         cardName: cardData.alias || "بطاقة شام",
         type: "pay",
-        title: `تذكرة عبور آمنة QR - خط ${busData.route_code || 'M1'}`,
-        subtitle: busData.route_name || 'خصم تعرفة الحافلة من القارئ المعكوس',
+        title: `تذكرة عبور آمنة QR - ${routeCode}`,
+        subtitle: busName,
         amount: -ticketPrice,
         timestamp: now
       };
@@ -1411,7 +1468,7 @@ async function startServer() {
 
       const paymentObj = {
         id: paymentId,
-        busId: targetBusId,
+        busId: resolvedBusId,
         tripId: tripId || "",
         amount: ticketPrice,
         balanceLeft: newBalance,

@@ -443,7 +443,9 @@ export const DriverDashboard: React.FC = () => {
                   <QRCodeCanvas 
                     value={JSON.stringify({ 
                       tripId: activeTrip.id,
-                      busId: activeTrip.routeId
+                      tripCode: activeTrip.tripCode || activeTrip.id,
+                      busId: activeTrip.busId || activeTrip.routeId,
+                      ticketPrice: activeTrip.ticketPrice || 1000
                     })}
                     size={192}
                     level="H"

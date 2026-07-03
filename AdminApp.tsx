@@ -52,6 +52,7 @@ interface RechargeRequest {
   userName: string;
   amount: number;
   receiptImage: string;
+  paymentMethod?: string;
   status: 'pending' | 'approved' | 'rejected';
   timestamp: number;
 }
@@ -101,7 +102,9 @@ export default function AdminApp() {
   // Trip Creation Form
   const [ownerName, setOwnerName] = useState('');
   const [plateNumber, setPlateNumber] = useState('');
-  const [selectedRouteId, setSelectedRouteId] = useState('bus_M1');
+  const [customRouteName, setCustomRouteName] = useState('');
+  const [customVehicleType, setCustomVehicleType] = useState('ميكرو باص');
+  const [customPrice, setCustomPrice] = useState('1500');
   const [generatedTrip, setGeneratedTrip] = useState<BusTrip | null>(null);
 
   // Image Zoom Modal
@@ -267,8 +270,8 @@ export default function AdminApp() {
   // Create Bus Trip
   const handleCreateTrip = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!ownerName || !plateNumber) {
-      triggerToast("يرجى كتابة اسم المالك ونمرة لوحة الباص.", "error");
+    if (!ownerName || !plateNumber || !customRouteName || !customVehicleType || !customPrice) {
+      triggerToast("يرجى ملء جميع حقول الإدخال الحرة والمخصصة لبث الرحلة.", "error");
       return;
     }
 
@@ -280,19 +283,23 @@ export default function AdminApp() {
         body: JSON.stringify({
           ownerName: ownerName.trim(),
           plateNumber: plateNumber.trim(),
-          routeId: selectedRouteId
+          routeName: customRouteName.trim(),
+          routeCode: customVehicleType.trim(),
+          ticketPrice: Number(customPrice)
         })
       });
 
       if (res.ok) {
         const data = await res.json();
         setGeneratedTrip(data.trip);
-        triggerToast("تم تسجيل الباص وتوليد كود الرحلة السري بنجاح!", "success");
+        triggerToast("تم تسجيل الباص المخصص وتوليد كود الرحلة السري بنجاح!", "success");
         setOwnerName('');
         setPlateNumber('');
+        setCustomRouteName('');
+        setCustomPrice('1500');
         loadAdminData();
       } else {
-        triggerToast("فشل تسجيل الحافلة وتوليد الرحلة.", "error");
+        triggerToast("فشل تسجيل الحافلة وتوليد الرحلة المخصصة.", "error");
       }
     } catch (err) {
       triggerToast("خطأ غير متوقع بالاتصال بالشبكة.", "error");
@@ -1082,17 +1089,20 @@ export default function AdminApp() {
                             </td>
                             <td className="p-4 font-black text-emerald-400 text-sm">{(req.amount || 0).toLocaleString()} ل.س</td>
                             <td className="p-4">
-                              {req.receiptImage ? (
-                                <button 
-                                  onClick={() => setZoomedImage(req.receiptImage)}
-                                  className="flex items-center gap-2 bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-300 px-3 py-1.5 rounded-xl transition text-[10px] font-black"
-                                >
-                                  <Eye size={12} className="text-amber-500" />
-                                  <span>عرض ومعاينة الإيصال</span>
-                                </button>
-                              ) : (
-                                <span className="text-slate-500 text-[10px]">لا توجد صورة إيصال</span>
-                              )}
+                              <div className="flex flex-col gap-1 items-start">
+                                <span className="text-[11px] font-extrabold text-slate-300">
+                                  {req.paymentMethod || 'سيريتل كاش'}
+                                </span>
+                                {req.receiptImage && req.receiptImage !== 'none' && (
+                                  <button 
+                                    onClick={() => setZoomedImage(req.receiptImage)}
+                                    className="flex items-center gap-2 bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-300 px-2 py-1 rounded-lg transition text-[9px] font-black"
+                                  >
+                                    <Eye size={10} className="text-amber-500" />
+                                    <span>معاينة الإيصال</span>
+                                  </button>
+                                )}
+                              </div>
                             </td>
                             <td className="p-4 text-slate-400 font-mono">{new Date(req.timestamp).toLocaleString('ar-SY')}</td>
                             <td className="p-4">
@@ -1303,18 +1313,42 @@ export default function AdminApp() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <label className="text-[10px] text-slate-400 font-bold block">اختيار خط النقل والمسار</label>
+                      <label className="text-[10px] text-slate-400 font-bold block">اسم خط النقل والمسار</label>
+                      <input 
+                        type="text" 
+                        required
+                        placeholder="مثال: المزة جبل أو البرامكة"
+                        value={customRouteName}
+                        onChange={(e) => setCustomRouteName(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white outline-none focus:border-emerald-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] text-slate-400 font-bold block">نوع واسطة النقل</label>
                       <select 
-                        value={selectedRouteId}
-                        onChange={(e) => setSelectedRouteId(e.target.value)}
+                        value={customVehicleType}
+                        onChange={(e) => setCustomVehicleType(e.target.value)}
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white outline-none cursor-pointer focus:border-emerald-500"
                       >
-                        {DEFAULT_BUSES.map(b => (
-                          <option key={b.id} value={b.id}>
-                            {b.route_name} - ({b.ticket_price} ل.س)
-                          </option>
-                        ))}
+                        <option value="ميكرو باص">ميكرو باص</option>
+                        <option value="باص نقل داخلي كبير">باص نقل داخلي كبير</option>
+                        <option value="سرفيس">سرفيس</option>
+                        <option value="بولمان بين المحافظات">بولمان بين المحافظات</option>
                       </select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] text-slate-400 font-bold block">التعرفة والتسعيرة الرقمية (الأجرة بالليرة السورية)</label>
+                      <input 
+                        type="number" 
+                        required
+                        min="500"
+                        placeholder="مثال: 1500"
+                        value={customPrice}
+                        onChange={(e) => setCustomPrice(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white outline-none focus:border-emerald-500"
+                      />
                     </div>
 
                     <button
@@ -1347,8 +1381,9 @@ export default function AdminApp() {
                         </div>
 
                         <div>
-                          <span className="text-[10px] text-slate-500 font-bold block">خط سير الرحلة:</span>
-                          <span className="text-white font-extrabold">{generatedTrip.routeName}</span>
+                          <span className="text-[10px] text-slate-500 font-bold block">خط سير الرحلة والتعرفة:</span>
+                          <span className="text-white font-extrabold block">{generatedTrip.routeName} ({generatedTrip.routeCode})</span>
+                          <span className="text-emerald-400 font-extrabold mt-0.5 block">{(generatedTrip.ticketPrice || 1000).toLocaleString()} ل.س</span>
                         </div>
 
                         {/* TRIP CODE */}
@@ -1413,6 +1448,7 @@ export default function AdminApp() {
                               <td className="p-4">
                                 <span className="bg-slate-800 text-slate-300 font-mono text-[9px] px-1.5 py-0.5 rounded font-black uppercase ml-1.5">{t.routeCode}</span>
                                 <span className="text-slate-300 font-semibold">{t.routeName}</span>
+                                <div className="text-[10px] font-bold text-emerald-400 mt-0.5 font-mono">{(t.ticketPrice || 1000).toLocaleString()} ل.س</div>
                               </td>
                               <td className="p-4 font-mono font-bold text-slate-300 tracking-wider text-[11px]">{t.tripCode}</td>
                               <td className="p-4 font-mono font-bold text-amber-500/80 tracking-wider text-[11px]">{t.password}</td>

@@ -54,6 +54,7 @@ const App: React.FC = () => {
   const [topupStep, setTopupStep] = useState<'info' | 'upload' | 'confirm'>('info');
   const [rechargeAmount, setRechargeAmount] = useState('5000');
   const [receiptImg, setReceiptImg] = useState<string | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<string>('Syriatel Cash');
 
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const saved = localStorage.getItem('theme');
@@ -526,120 +527,105 @@ const App: React.FC = () => {
       case 'driver':
         return <DriverDashboard />;
       case 'topup':
-        if (topupStep === 'info') {
-          return (
-            <div className="bg-[#121831] min-h-screen p-8 text-center animate-in fade-in flex flex-col pt-12" dir="rtl">
-               {/* Header */}
-               <div className="flex items-center justify-between mb-16">
-                  <div className="w-10"></div>
-                  <h2 className="text-2xl font-bold text-white tracking-wide">استقبال</h2>
-                  <button onClick={() => setActiveView('home')} className="text-white p-2">
-                    <ChevronLeft size={28} className="rotate-180" />
-                  </button>
-               </div>
-
-               {/* EXACT ORIGINAL IMAGE CONTAINER */}
-               <div className="relative mx-auto w-full max-w-[320px] mb-12 animate-in zoom-in duration-700">
-                  <div className="bg-white rounded-[40px] shadow-[0_25px_60px_rgba(0,0,0,0.6)] overflow-hidden flex flex-col items-center">
-                     {/* IMAGE AS PROVIDED BY THE USER - NO MODIFICATIONS */}
-                     <img 
-                       src={ORIGINAL_QR_IMAGE} 
-                       alt="ShamCash Official QR" 
-                       className="w-full h-auto object-contain"
-                     />
-                  </div>
-               </div>
-
-               {/* ID Text Section - Matches exactly with the visual reference */}
-               <div className="text-center space-y-1 mb-12 px-4">
-                  <p className="text-white text-[16px] font-medium break-all tracking-tight leading-none opacity-90">
-                    f165bd2f32805f90dc8f21ace8e86f6415
-                  </p>
-                  <p className="text-white text-[16px] font-medium opacity-90">6f6415</p>
-               </div>
-               
-               {/* Action Buttons */}
-               <div className="flex justify-center gap-16 mb-12">
-                  <button className="text-white hover:scale-110 active:scale-90 transition-all duration-300">
-                    <Share2 size={32} strokeWidth={2.5} />
-                  </button>
-                  <button 
-                    onClick={() => {
-                      navigator.clipboard.writeText("f165bd2f32805f90dc8f21ace8e86f64156f6415");
-                      triggerToast('تم نسخ المعرف بنجاح', 'success');
-                    }} 
-                    className="text-white hover:scale-110 active:scale-90 transition-all duration-300"
-                  >
-                    <Copy size={32} strokeWidth={2.5} />
-                  </button>
-               </div>
-
-               {/* Bottom Link Button */}
-               <div className="mt-auto pb-10 px-4">
-                  <button 
-                    onClick={() => setTopupStep('upload')}
-                    className="w-full bg-white/5 border border-white/10 text-white font-black py-6 rounded-[28px] text-lg active:scale-95 transition-all backdrop-blur-md shadow-2xl"
-                  >
-                    أرسلت المبلغ، ارفع الإشعار
-                  </button>
-               </div>
-            </div>
-          );
-        }
-
-        if (topupStep === 'upload') {
+        if (topupStep !== 'confirm') {
           return (
             <ActionView 
-              onBack={() => setTopupStep('info')}
-              title="إثبات الدفع" 
-              subtitle="يرجى إدخال المبلغ وصورة إشعار شام كاش" 
-              icon={<ImageIcon />} 
+              onBack={() => { setActiveView('home'); setTopupStep('info'); }}
+              title="شحن رصيد المحفظة" 
+              subtitle="أدخل قيمة الشحن المطلوبة واختر وسيلة الدفع المناسبة" 
+              icon={<Wallet />} 
               hideConfirm
             >
                <div className="space-y-6">
-                  <div className="bg-white dark:bg-slate-800 p-6 rounded-[32px] border-2 border-slate-100 dark:border-slate-700">
-                     <p className="text-[10px] font-black text-slate-400 mb-4 uppercase">المبلغ المرسل (ل.س)</p>
+                  {/* Amount Input */}
+                  <div className="bg-white dark:bg-slate-900 p-6 rounded-[32px] border border-slate-100 dark:border-slate-800 shadow-sm">
+                     <p className="text-[10px] font-black text-slate-400 mb-3 uppercase text-right">قيمة الشحن المطلوبة (ل.س) *</p>
                      <input 
                        type="number" 
                        value={rechargeAmount}
                        onChange={e => setRechargeAmount(e.target.value)}
                        className="w-full text-center text-4xl font-black bg-transparent outline-none dark:text-white"
+                       placeholder="0"
                      />
+                     
+                     {/* Presets */}
+                     <div className="grid grid-cols-4 gap-2 mt-4">
+                       {['5000', '10000', '25000', '50000'].map((preset) => (
+                         <button
+                           key={preset}
+                           type="button"
+                           onClick={() => setRechargeAmount(preset)}
+                           className={`py-2 px-1 text-xs font-black rounded-xl border transition-all ${
+                             rechargeAmount === preset
+                               ? 'bg-emerald-600 border-emerald-600 text-white shadow-md'
+                               : 'bg-slate-50 dark:bg-slate-950 border-slate-100 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100'
+                           }`}
+                         >
+                           {parseInt(preset).toLocaleString()}
+                         </button>
+                       ))}
+                     </div>
                   </div>
 
-                  {!receiptImg ? (
-                    <button 
-                      onClick={() => setReceiptImg('https://picsum.photos/seed/sham_receipt/600/800')}
-                      className="w-full aspect-[4/3] bg-slate-100 dark:bg-slate-900 rounded-[40px] flex flex-col items-center justify-center gap-4 border-2 border-dashed border-slate-300 dark:border-slate-700"
-                    >
-                       <Camera size={48} className="text-slate-400" />
-                       <span className="text-sm font-black text-slate-500">رفع صورة إشعار الإرسال</span>
-                    </button>
-                  ) : (
-                    <div className="relative rounded-[40px] overflow-hidden border-4 border-white dark:border-slate-800 shadow-xl">
-                       <img src={receiptImg} className="w-full h-auto" />
-                       <button onClick={() => setReceiptImg(null)} className="absolute top-4 right-4 bg-red-600 text-white p-3 rounded-full"><XCircle size={24} /></button>
+                  {/* Payment Method selector */}
+                  <div className="bg-white dark:bg-slate-900 p-6 rounded-[32px] border border-slate-100 dark:border-slate-800 shadow-sm text-right">
+                    <p className="text-[10px] font-black text-slate-400 mb-4 uppercase">وسيلة الدفع الإلكتروني *</p>
+                    <div className="space-y-3">
+                      {[
+                        { id: 'Syriatel Cash', name: 'سيريتل كاش (Syriatel Cash)', desc: 'دفع فوري عبر حساب سيريتل كاش', color: 'border-red-500/20 hover:border-red-500/50', activeColor: 'border-red-500 bg-red-500/5 text-red-600 dark:text-red-400' },
+                        { id: 'MTN Cash', name: 'كاش بموبايلك (MTN Cash)', desc: 'دفع فوري عبر حساب كاش بموبايلك', color: 'border-yellow-500/20 hover:border-yellow-500/50', activeColor: 'border-yellow-500 bg-yellow-500/5 text-yellow-600 dark:text-yellow-400' },
+                        { id: 'BIMO', name: 'بيمو الدفع الإلكتروني', desc: 'عبر تطبيق بنك بيمو السعودي الفرنسي', color: 'border-blue-500/20 hover:border-blue-500/50', activeColor: 'border-blue-500 bg-blue-500/5 text-blue-600 dark:text-blue-400' },
+                        { id: 'Cash', name: 'دفع نقدي عبر الموزع المعتمَد', desc: 'تعبئة فورية لدى أقرب كشك أو مكتب معتمد', color: 'border-emerald-500/20 hover:border-emerald-500/50', activeColor: 'border-emerald-500 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400' }
+                      ].map((method) => {
+                        const isSelected = paymentMethod === method.id;
+                        return (
+                          <div
+                            key={method.id}
+                            onClick={() => setPaymentMethod(method.id)}
+                            className={`p-4 rounded-2xl border-2 cursor-pointer transition-all ${
+                              isSelected ? method.activeColor : `${method.color} bg-slate-50 dark:bg-slate-950 border-slate-100 dark:border-slate-850`
+                            }`}
+                          >
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <h4 className="font-extrabold text-sm">{method.name}</h4>
+                                <p className="text-[10px] text-slate-400 mt-1">{method.desc}</p>
+                              </div>
+                              <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${isSelected ? 'border-current' : 'border-slate-300 dark:border-slate-750'}`}>
+                                {isSelected && <div className="w-2.5 h-2.5 rounded-full bg-current"></div>}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                  )}
+                  </div>
+
+                  {/* Submission Info */}
+                  <div className="p-4 bg-emerald-500/10 rounded-2xl border border-emerald-500/20 text-emerald-800 dark:text-emerald-300 text-xs font-bold leading-normal text-right">
+                    سيتم تفعيل الرصيد مباشرة في محفظتك الإلكترونية فور معالجة طلبك عبر {paymentMethod === 'Syriatel Cash' ? 'سيريتل كاش' : paymentMethod === 'MTN Cash' ? 'كاش بموبايلك' : paymentMethod === 'BIMO' ? 'بنك بيمو' : 'الموزع المعتمد'}.
+                  </div>
 
                   <button 
-                    disabled={!receiptImg}
+                    disabled={!rechargeAmount || parseInt(rechargeAmount) <= 0}
                     onClick={async () => {
                       const ok = await rechargeService.submitRequest({
                         userId: session?.user.phone || 'unknown',
                         userName: session?.user.fullName || 'User',
                         amount: parseInt(rechargeAmount),
-                        receiptImage: receiptImg || ''
-                      }, session?.token || '');
+                        receiptImage: 'none',
+                        paymentMethod: paymentMethod,
+                      } as any, session?.token || '');
+                      
                       if (ok) {
                         setTopupStep('confirm');
                       } else {
-                        triggerToast('فشل إرسال طلب الشحن. يرجى إعادة المحاولة.', 'error');
+                        triggerToast('فشل إرسال طلب الشحن. يرجى المحاولة لاحقاً', 'error');
                       }
                     }}
-                    className="w-full bg-emerald-600 text-white font-black py-6 rounded-[32px] text-xl disabled:opacity-50 shadow-xl"
+                    className="w-full bg-emerald-600 text-white font-black py-6 rounded-[32px] text-xl disabled:opacity-50 shadow-xl active:scale-95 transition-all"
                   >
-                    إرسال الطلب للإدارة
+                    تأكيد وإرسال طلب الشحن
                   </button>
                </div>
             </ActionView>
@@ -649,13 +635,18 @@ const App: React.FC = () => {
         if (topupStep === 'confirm') {
           return (
             <div className="p-8 pt-24 text-center animate-in zoom-in duration-500 flex flex-col min-h-screen">
-               <div className="w-32 h-32 bg-amber-500 rounded-[48px] flex items-center justify-center mx-auto mb-10 shadow-2xl relative">
-                  <div className="absolute inset-0 bg-amber-500 rounded-[48px] animate-ping opacity-20"></div>
-                  <Clock size={64} className="text-white" />
+               <div className="w-32 h-32 bg-emerald-500 rounded-[48px] flex items-center justify-center mx-auto mb-10 shadow-2xl relative">
+                  <div className="absolute inset-0 bg-emerald-500 rounded-[48px] animate-ping opacity-20"></div>
+                  <CheckCircle2 size={64} className="text-white" />
                </div>
-               <h2 className="text-4xl font-black dark:text-white mb-2">طلبك قيد المراجعة</h2>
-               <p className="text-slate-400 font-bold mb-12 px-6">سوف نرسل لك إشعاراً فور قبول الطلب وتعبئة رصيدك بمبلغ {rechargeAmount} ل.س</p>
-               <button onClick={() => setActiveView('home')} className="w-full bg-slate-900 dark:bg-white dark:text-slate-900 text-white font-black py-6 rounded-[32px] text-xl mt-auto mb-10">العودة للرئيسية</button>
+               <h2 className="text-4xl font-black dark:text-white mb-2">طلبك قيد المعالجة</h2>
+               <p className="text-slate-400 font-bold mb-4 px-6">تم إرسال طلب الشحن بنجاح وسنقوم بإشعارك فور تفعيله تلقائياً.</p>
+               <div className="bg-slate-100 dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 text-right space-y-2 mb-12">
+                 <p className="text-xs text-slate-500">تفاصيل العملية:</p>
+                 <p className="text-sm font-black dark:text-white">المبلغ المطلوب: <span className="text-emerald-500">{parseInt(rechargeAmount).toLocaleString()} ل.س</span></p>
+                 <p className="text-sm font-black dark:text-white">طريقة الدفع: <span>{paymentMethod === 'Syriatel Cash' ? 'سيريتل كاش' : paymentMethod === 'MTN Cash' ? 'كاش بموبايلك' : paymentMethod === 'BIMO' ? 'بيمو الدفع الإلكتروني' : 'موزع معتمد'}</span></p>
+               </div>
+               <button onClick={() => { setActiveView('home'); setTopupStep('info'); }} className="w-full bg-slate-900 dark:bg-white dark:text-slate-900 text-white font-black py-6 rounded-[32px] text-xl mt-auto mb-10">العودة للرئيسية</button>
             </div>
           );
         }
@@ -996,12 +987,7 @@ const App: React.FC = () => {
                    <div><h1 className="text-xl font-black dark:text-white">أهلاً، {session?.user.fullName.split(' ')[0]}</h1></div>
                 </div>
                 <div className="flex gap-2">
-                   {/* Developer Navigation Hub */}
-                   <div className="fixed bottom-4 right-4 z-50 flex gap-2">
-                      <button onClick={() => setActiveView('home')} className="p-3 bg-slate-800 text-white rounded-full shadow-lg">🏠</button>
-                      <button onClick={() => setActiveView('driver')} className="p-3 bg-emerald-600 text-white rounded-full shadow-lg">🚌</button>
-                      <button onClick={() => setActiveView('admin_login')} className="p-3 bg-amber-600 text-white rounded-full shadow-lg">🔐</button>
-                   </div>
+                   
                    {session?.role === 'admin' && (
                      <button onClick={() => setActiveView('admin_requests')} className="w-12 h-12 bg-amber-100 text-amber-600 rounded-2xl flex items-center justify-center shadow-sm relative">
                         <ShieldCheck size={24} />
@@ -1090,161 +1076,124 @@ const App: React.FC = () => {
   // Check if it is driver route
   const isDriverView = window.location.pathname === '/driver' || window.location.search.includes('view=driver');
 
-  if (isDriverView) {
-    return <DriverDashboard />;
-  }
-
-  // Enforce Mobile-Only Access for Passenger Views (Disabled for Demo)
-  if (false && isMobile === false) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center p-6 text-center select-none" dir="rtl">
-        {/* Background Ambient Glow */}
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-72 h-72 bg-emerald-500/10 rounded-full blur-3xl z-0"></div>
-        
-        <div className="relative z-10 max-w-md w-full bg-slate-900/60 border border-slate-800 backdrop-blur-xl rounded-[40px] p-8 space-y-6 shadow-2xl">
-          {/* Cyber Lock Shield Header */}
-          <div className="relative w-20 h-20 bg-emerald-950/50 border border-emerald-500/30 rounded-3xl flex items-center justify-center mx-auto shadow-lg">
-            <ShieldCheck size={40} className="text-emerald-400" />
-            <div className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
-          </div>
-
-          <div className="space-y-2">
-            <span className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-black px-4 py-1.5 rounded-full uppercase tracking-wider block w-fit mx-auto">
-              نظام الأمان السيبراني للركاب (ChamCard Shield)
-            </span>
-            <h1 className="text-xl font-black text-white mt-3">وصول آمن مقيد للهواتف المحمولة</h1>
-            <p className="text-xs text-slate-400 leading-relaxed font-bold">
-              تطبيق العميل والراكب لـ <strong className="text-emerald-400">شام كارت Pro</strong> مصمم للعمل كلياً كـ Native App على الهواتف الذكية لأسباب تتعلق بالأمان السيبراني وحماية العمليات المالية والحد من التزوير.
-            </p>
-          </div>
-
-          {/* Secure details box */}
-          <div className="bg-slate-950/80 rounded-2xl p-4 text-right border border-slate-800 space-y-2">
-            <div className="flex justify-between items-center text-[10px] text-slate-500 font-semibold">
-              <span>نوع المحاولة</span>
-              <span className="text-rose-400 font-bold">وصول غير مصرح (سطح المكتب)</span>
-            </div>
-            <div className="flex justify-between items-center text-[10px] text-slate-500 font-semibold border-t border-slate-900/50 pt-2">
-              <span>متصفحك الحالي</span>
-              <span className="text-slate-300 font-mono text-right truncate max-w-[180px]">{(navigator?.userAgent || '').split(' ')[0]}</span>
-            </div>
-            <p className="text-[9px] text-slate-400 font-bold leading-normal pt-2 border-t border-slate-900/50 text-center">
-              تم رصد المعلمات الأمنية ولم يتم التحقق من ميزة اللمس (Touch capability) أو نظام تشغيل الهواتف المحمولة.
-            </p>
-          </div>
-
-          {/* Dynamic QR to scan and continue on phone */}
-          <div className="bg-white p-3 rounded-2xl w-fit mx-auto shadow-md">
-            <QRCodeCanvas 
-              value={typeof window !== 'undefined' ? window.location.href : 'https://chamcard.pro'} 
-              size={112}
-              level="H"
-            />
-          </div>
-          <p className="text-[10px] text-slate-500 font-bold">
-            امسح الرمز أعلاه بكاميرا هاتفك لفتح الرابط واستخدام محفظتك الرقمية بأمان.
-          </p>
+  const renderAppContent = () => {
+    if (isDriverView || activeView === 'driver') {
+      return (
+        <div className="pt-16">
+          <DriverDashboard />
         </div>
+      );
+    }
+
+    if (!session) {
+      return (
+        <div className="pt-16">
+          <Auth onLogin={setSession} />
+        </div>
+      );
+    }
+
+    return (
+      <div className="w-full max-w-md mx-auto bg-slate-50 dark:bg-slate-950 min-h-screen relative overflow-hidden flex flex-col shadow-2xl" dir="rtl">
+        {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+        <main className="flex-1 relative overflow-y-auto no-scrollbar pt-16">{renderView()}</main>
+        {['home', 'cards', 'offers', 'profile', 'qr_payment', 'transactions_history'].includes(activeView) && (
+          <div className="fixed bottom-10 left-1/2 -translate-x-1/2 w-[92%] z-[100]">
+            <nav className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-2xl p-2 rounded-[42px] shadow-xl flex justify-between items-center border border-white/40">
+              <NavTab active={activeView === 'home' || activeView === 'transactions_history'} icon={<Home />} label="الرئيسية" onClick={() => setActiveView('home')} />
+              <NavTab active={activeView === 'cards'} icon={<CreditCard />} label="محفظتي" onClick={() => setActiveView('cards')} />
+              <button 
+                onClick={() => setActiveView('qr_payment')} 
+                className={`w-16 h-16 rounded-[28px] text-white shadow-xl -mt-10 border-[4px] border-white dark:border-slate-950 flex items-center justify-center transition-all ${
+                  activeView === 'qr_payment' 
+                    ? 'bg-emerald-500 scale-110 shadow-emerald-500/40 ring-4 ring-emerald-500/20' 
+                    : 'bg-emerald-600 hover:bg-emerald-500 hover:scale-105'
+                }`}
+              >
+                <QrCode size={30} />
+              </button>
+              <NavTab active={activeView === 'offers'} icon={<Tag />} label="عروض" onClick={() => setActiveView('offers')} />
+              <NavTab active={activeView === 'profile'} icon={<User />} label="حسابي" onClick={() => setActiveView('profile')} />
+            </nav>
+          </div>
+        )}
+
+        {showInspector && (
+          <CardInspector 
+            onClose={() => setShowInspector(false)} 
+            nfcStatus={system.nfcStatus} 
+            setNfcStatus={(s) => setSystem(p => ({...p, nfcStatus: s}))} 
+            dispatch={dispatchAction} 
+            cards={cards}
+            setCards={setCards}
+          />
+        )}
+        {syncCard && (
+          <NfcSyncModal 
+            card={syncCard} 
+            token={session?.token || ""} 
+            onClose={() => setSyncCard(null)} 
+            onSuccess={(newBalance) => {
+              setCards(prev => prev.map(c => c.id === syncCard.id ? { ...c, balance: newBalance, pendingNfcAmount: 0 } : c));
+              setTransactions(prev => [
+                {
+                  id: 'tx_nfc_' + Date.now(),
+                  cardId: syncCard.id,
+                  cardName: syncCard.alias || "بطاقة فيزيائية",
+                  type: 'recharge',
+                  title: "شحن عبر NFC نجح",
+                  subtitle: "تم تفريغ الرصيد المعلق بنجاح",
+                  amount: syncCard.pendingNfcAmount || 0,
+                  timestamp: Date.now()
+                },
+                ...prev
+              ]);
+              setSyncCard(null);
+            }} 
+          />
+        )}
+        {showAddCard && (
+          <AddCardModal 
+            onClose={() => setShowAddCard(false)} 
+            onAdd={(newCard) => {
+              if (session?.token) {
+                fetch('/api/cards/add', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${session.token}`
+                  },
+                  body: JSON.stringify(newCard)
+                })
+                .then(res => {
+                  if (res.ok) {
+                    loadDashboard();
+                    triggerToast('تمت إضافة البطاقة بنجاح', 'success');
+                  } else {
+                    triggerToast('فشل إضافة البطاقة بالخادم', 'error');
+                  }
+                })
+                .catch(err => {
+                  // Offline fallback
+                  setCards(prev => [...prev, newCard]);
+                  triggerToast('تم الحفظ محلياً (وضع العمل دون اتصال)', 'success');
+                });
+              } else {
+                setCards(prev => [...prev, newCard]);
+                triggerToast('تمت إضافة البطاقة بنجاح', 'success');
+              }
+              setShowAddCard(false);
+            }} 
+          />
+        )}
       </div>
     );
-  }
-
-  if (!session) return <Auth onLogin={setSession} />;
+  };
 
   return (
-    <div className="w-full max-w-md mx-auto bg-slate-50 dark:bg-slate-950 min-h-screen relative overflow-hidden flex flex-col shadow-2xl" dir="rtl">
-      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
-      <main className="flex-1 relative overflow-y-auto no-scrollbar">{renderView()}</main>
-      {['home', 'cards', 'offers', 'profile', 'qr_payment', 'transactions_history'].includes(activeView) && (
-        <div className="fixed bottom-10 left-1/2 -translate-x-1/2 w-[92%] z-[100]">
-          <nav className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-2xl p-2 rounded-[42px] shadow-xl flex justify-between items-center border border-white/40">
-            <NavTab active={activeView === 'home' || activeView === 'transactions_history'} icon={<Home />} label="الرئيسية" onClick={() => setActiveView('home')} />
-            <NavTab active={activeView === 'cards'} icon={<CreditCard />} label="محفظتي" onClick={() => setActiveView('cards')} />
-            <button 
-              onClick={() => setActiveView('qr_payment')} 
-              className={`w-16 h-16 rounded-[28px] text-white shadow-xl -mt-10 border-[4px] border-white dark:border-slate-950 flex items-center justify-center transition-all ${
-                activeView === 'qr_payment' 
-                  ? 'bg-emerald-500 scale-110 shadow-emerald-500/40 ring-4 ring-emerald-500/20' 
-                  : 'bg-emerald-600 hover:bg-emerald-500 hover:scale-105'
-              }`}
-            >
-              <QrCode size={30} />
-            </button>
-            <NavTab active={activeView === 'offers'} icon={<Tag />} label="عروض" onClick={() => setActiveView('offers')} />
-            <NavTab active={activeView === 'profile'} icon={<User />} label="حسابي" onClick={() => setActiveView('profile')} />
-          </nav>
-        </div>
-      )}
-
-      {showInspector && (
-        <CardInspector 
-          onClose={() => setShowInspector(false)} 
-          nfcStatus={system.nfcStatus} 
-          setNfcStatus={(s) => setSystem(p => ({...p, nfcStatus: s}))} 
-          dispatch={dispatchAction} 
-          cards={cards}
-          setCards={setCards}
-        />
-      )}
-      {syncCard && (
-        <NfcSyncModal 
-          card={syncCard} 
-          token={session?.token || ""} 
-          onClose={() => setSyncCard(null)} 
-          onSuccess={(newBalance) => {
-            setCards(prev => prev.map(c => c.id === syncCard.id ? { ...c, balance: newBalance, pendingNfcAmount: 0 } : c));
-            setTransactions(prev => [
-              {
-                id: 'tx_nfc_' + Date.now(),
-                cardId: syncCard.id,
-                cardName: syncCard.alias || "بطاقة فيزيائية",
-                type: 'recharge',
-                title: "شحن عبر NFC نجح",
-                subtitle: "تم تفريغ الرصيد المعلق بنجاح",
-                amount: syncCard.pendingNfcAmount || 0,
-                timestamp: Date.now()
-              },
-              ...prev
-            ]);
-            setSyncCard(null);
-          }} 
-        />
-      )}
-      {showAddCard && (
-        <AddCardModal 
-          onClose={() => setShowAddCard(false)} 
-          onAdd={(newCard) => {
-            if (session?.token) {
-              fetch('/api/cards/add', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${session.token}`
-                },
-                body: JSON.stringify(newCard)
-              })
-              .then(res => {
-                if (res.ok) {
-                  loadDashboard();
-                  triggerToast('تمت إضافة البطاقة بنجاح', 'success');
-                } else {
-                  triggerToast('فشل إضافة البطاقة بالخادم', 'error');
-                }
-              })
-              .catch(err => {
-                // Offline fallback
-                setCards(prev => [...prev, newCard]);
-                triggerToast('تم الحفظ محلياً (وضع العمل دون اتصال)', 'success');
-              });
-            } else {
-              setCards(prev => [...prev, newCard]);
-              triggerToast('تمت إضافة البطاقة بنجاح', 'success');
-            }
-            setShowAddCard(false);
-          }} 
-        />
-      )}
-    </div>
+    <>
+      {renderAppContent()}
+    </>
   );
 };
 
@@ -1381,6 +1330,14 @@ const QrPaymentView: React.FC<{
   const [loadingQr, setLoadingQr] = useState<boolean>(false);
   const [qrCountdown, setQrCountdown] = useState<number>(60);
 
+  const openedAtRef = useRef<number>(Date.now());
+
+  useEffect(() => {
+    if (payMode === 'generate') {
+      openedAtRef.current = Date.now();
+    }
+  }, [payMode]);
+
   const fetchSignedQr = () => {
     if (!selectedCardId) return;
     setLoadingQr(true);
@@ -1424,6 +1381,57 @@ const QrPaymentView: React.FC<{
     }
     return () => clearInterval(timer);
   }, [payMode, selectedCardId]);
+
+  // Real-time active polling to detect driver scanning
+  useEffect(() => {
+    let pollInterval: any;
+    if (payMode === 'generate' && payStep === 'scan') {
+      pollInterval = setInterval(() => {
+        const session = authStore.getSession();
+        if (!session?.token) return;
+
+        fetch('/api/dashboard', {
+          headers: {
+            'Authorization': `Bearer ${session.token}`
+          }
+        })
+        .then(res => {
+          if (res.ok) return res.json();
+          throw new Error("Failed to poll dashboard");
+        })
+        .then(data => {
+          if (data && Array.isArray(data.transactions)) {
+            // Find a pay transaction with timestamp after openedAtRef
+            const newPayment = data.transactions.find((tx: any) => 
+              tx.type === 'pay' && tx.timestamp > openedAtRef.current
+            );
+
+            if (newPayment) {
+              playPhysicalBeep();
+              if (data.cards) setCards(data.cards);
+              if (data.transactions) setTransactions(data.transactions);
+
+              setPaymentDetails({
+                amount: Math.abs(newPayment.amount),
+                cardName: newPayment.cardName || currentCard?.alias || 'بطاقة شام',
+                txId: newPayment.id,
+                busName: newPayment.title || 'خصم تعرفة الحافلة من السائق'
+              });
+
+              setTimeout(() => {
+                setPayStep('done');
+                triggerToast('تم خصم تذكرة العبور تلقائياً عبر القارئ بنجاح!', 'success');
+              }, 300);
+            }
+          }
+        })
+        .catch(err => {
+          console.warn("Error polling driver scan status:", err);
+        });
+      }, 1500);
+    }
+    return () => clearInterval(pollInterval);
+  }, [payMode, payStep, selectedCardId, currentCard]);
 
   useEffect(() => {
     fetch('/api/buses/locations')
@@ -1966,10 +1974,10 @@ const QrPaymentView: React.FC<{
               </div>
             ) : signedQr ? (
               <div className="relative bg-white p-4 rounded-2xl w-fit mx-auto shadow-lg border border-slate-100">
-                <img 
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(signedQr)}`} 
-                  alt="Signed Card Token" 
-                  className="w-52 h-52 object-contain"
+                <QRCodeCanvas 
+                  value={signedQr} 
+                  size={208}
+                  level="H"
                 />
                 <div className="absolute inset-0 m-auto w-10 h-10 bg-slate-950 rounded-xl border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-md">
                   <ShieldCheck size={20} />
