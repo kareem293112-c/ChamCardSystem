@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { initializeApp } from 'firebase/app';
@@ -1293,6 +1294,159 @@ async function startServer() {
     } catch (err) {
       console.error("Pay QR Error:", err);
       res.status(500).json({ message: "فشل إتمام عملية الدفع الرقمية." });
+    }
+  });
+
+  // GET Secure Passenger signed-qr with custom HMAC signature & timestamp
+  app.get("/api/cards/:id/signed-qr", async (req, res) => {
+    try {
+      const phone = extractUserPhone(req);
+      if (!phone) {
+        return res.status(401).json({ message: "غير مصرح بالدخول" });
+      }
+
+      const cardId = req.params.id;
+      const cardDoc = await db.collection('cards').doc(cardId).get();
+      if (!cardDoc.exists) {
+        return res.status(404).json({ message: "البطاقة غير موجودة" });
+      }
+
+      const cardData = cardDoc.data();
+      if (cardData.userId !== phone) {
+        return res.status(403).json({ message: "غير مصرح لك بالوصول لهذه البطاقة" });
+      }
+
+      if (cardData.status !== 'active') {
+        return res.status(400).json({ message: "البطاقة مجمدة أو محظورة" });
+      }
+
+      const timestamp = Date.now();
+      const secret = process.env.JWT_SECRET || 'sham_card_pro_ultra_secure_secret_key_2026';
+      const rawData = `${cardId}:${phone}:${timestamp}`;
+      const signature = crypto.createHmac('sha256', secret).update(rawData).digest('hex');
+      
+      const qrPayload = {
+        cardId,
+        userId: phone,
+        timestamp,
+        signature
+      };
+
+      const qrToken = Buffer.from(JSON.stringify(qrPayload)).toString('base64');
+      res.json({ qrToken });
+    } catch (err) {
+      console.error("Signed QR Generation Error:", err);
+      res.status(500).json({ message: "فشل توليد رمز البطاقة الآمن" });
+    }
+  });
+
+  // POST driver reverse scanning passenger signed-qr
+  app.post("/api/trips/pay-signed-qr", async (req, res) => {
+    try {
+      const { qrToken, busId, tripId } = req.body;
+      if (!qrToken) {
+        return res.status(400).json({ message: "رمز البطاقة مفقود" });
+      }
+
+      // Decode Base64 token
+      let qrPayload;
+      try {
+        const decoded = Buffer.from(qrToken, 'base64').toString('utf-8');
+        qrPayload = JSON.parse(decoded);
+      } catch (e) {
+        return res.status(400).json({ message: "رمز العبور غير صالح أو تالف" });
+      }
+
+      const { cardId, userId, timestamp, signature } = qrPayload;
+      if (!cardId || !userId || !timestamp || !signature) {
+        return res.status(400).json({ message: "مكونات الرمز مفقودة" });
+      }
+
+      // 1. Validate signature
+      const secret = process.env.JWT_SECRET || 'sham_card_pro_ultra_secure_secret_key_2026';
+      const rawData = `${cardId}:${userId}:${timestamp}`;
+      const expectedSignature = crypto.createHmac('sha256', secret).update(rawData).digest('hex');
+
+      if (signature !== expectedSignature) {
+        return res.status(403).json({ message: "فشل التحقق الرقمي! الرمز تم التلاعب به" });
+      }
+
+      // 2. Validate timestamp (expires after 65 seconds)
+      const now = Date.now();
+      if (now - timestamp > 65000) {
+        return res.status(410).json({ message: "رمز العبور منتهي الصلاحية! يرجى تحديث الرمز" });
+      }
+
+      // 3. Fetch active card and process payment
+      const cardDoc = await db.collection('cards').doc(cardId).get();
+      if (!cardDoc.exists) {
+        return res.status(404).json({ message: "البطاقة غير موجودة بالنظام" });
+      }
+
+      const cardData = cardDoc.data();
+      if (cardData.status !== 'active') {
+        return res.status(400).json({ message: "هذه البطاقة غير نشطة (محظورة أو مجمدة)" });
+      }
+
+      // Validate bus details
+      const targetBusId = busId || "bus_M1";
+      const busDoc = await db.collection('buses').doc(targetBusId).get();
+      if (!busDoc.exists) {
+        return res.status(404).json({ message: "الحافلة غير مسجلة" });
+      }
+      const busData = busDoc.data();
+      const ticketPrice = busData.ticket_price || 1000;
+
+      // Validate sufficient balance
+      if (cardData.balance < ticketPrice) {
+        return res.status(400).json({ message: `رصيد البطاقة غير كافٍ. الأجرة المطلوبة: ${ticketPrice.toLocaleString()} ل.س` });
+      }
+
+      // Deduct balance
+      const newBalance = cardData.balance - ticketPrice;
+      await db.collection('cards').doc(cardId).update({ balance: newBalance });
+
+      // Create transaction
+      const txId = "tx_pay_" + Math.random().toString(36).substr(2, 9);
+      const txObj = {
+        id: txId,
+        userId: userId,
+        cardId: cardId,
+        cardName: cardData.alias || "بطاقة شام",
+        type: "pay",
+        title: `تذكرة عبور آمنة QR - خط ${busData.route_code || 'M1'}`,
+        subtitle: busData.route_name || 'خصم تعرفة الحافلة من القارئ المعكوس',
+        amount: -ticketPrice,
+        timestamp: now
+      };
+      await db.collection('transactions').doc(txId).set(txObj);
+
+      // Create driver-side log/payment record
+      const paymentId = "pm_" + Math.random().toString(36).substr(2, 9);
+      const userDoc = await db.collection('users').doc(userId).get();
+      const passengerName = userDoc.exists ? (userDoc.data()?.fullName || "راكب بطاقة رقمية") : "راكب بطاقة رقمية";
+
+      const paymentObj = {
+        id: paymentId,
+        busId: targetBusId,
+        tripId: tripId || "",
+        amount: ticketPrice,
+        balanceLeft: newBalance,
+        passengerName: passengerName,
+        status: "success",
+        timestamp: now
+      };
+      await db.collection('bus_payments').doc(paymentId).set(paymentObj);
+
+      res.json({
+        success: true,
+        balance: newBalance,
+        transaction: txObj,
+        payment: paymentObj
+      });
+    } catch (err) {
+      console.error("Pay Signed QR Error:", err);
+      res.status(500).json({ message: "فشل إتمام عملية الدفع الرقمية بالرمز الآمن." });
     }
   });
 

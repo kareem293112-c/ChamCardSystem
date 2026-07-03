@@ -34,6 +34,8 @@ export const DriverDashboard: React.FC = () => {
   const [showSimPanel, setShowSimPanel] = useState<boolean>(false);
   const [simName, setSimName] = useState<string>('مجد الشامي');
   const [simLoading, setSimLoading] = useState<boolean>(false);
+  const [passengerTokenInput, setPassengerTokenInput] = useState<string>('');
+  const [scanResultToast, setScanResultToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   const seenPaymentIdsRef = useRef<Set<string>>(new Set());
   const isFirstLoadRef = useRef<boolean>(true);
@@ -263,6 +265,42 @@ export const DriverDashboard: React.FC = () => {
     }
   };
 
+  // Real-time reverse scanning handler for passenger cryptographically signed QR
+  const handleScanPassengerSignedQr = async (token: string) => {
+    if (!activeTrip) return;
+    if (!token.trim()) {
+      setScanResultToast({ message: "الرجاء إدخال الرمز المشفر للراكب", type: 'error' });
+      setTimeout(() => setScanResultToast(null), 3000);
+      return;
+    }
+    setSimLoading(true);
+    try {
+      const res = await fetch('/api/trips/pay-signed-qr', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          qrToken: token.trim(),
+          busId: activeTrip.routeId,
+          tripId: activeTrip.id
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setPassengerTokenInput('');
+        setScanResultToast({ message: "تم التحقق من التوقيع الرقمي وصلاحية الوقت وخصم الرصيد بنجاح!", type: 'success' });
+        fetchTripStatus();
+      } else {
+        setScanResultToast({ message: data.message || "فشل التحقق من الرمز الرقمي", type: 'error' });
+      }
+    } catch (err) {
+      console.error(err);
+      setScanResultToast({ message: "خطأ بالاتصال بالخادم", type: 'error' });
+    } finally {
+      setSimLoading(false);
+      setTimeout(() => setScanResultToast(null), 5000);
+    }
+  };
+
   // Main UI Render
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans relative overflow-hidden" dir="rtl">
@@ -372,6 +410,15 @@ export const DriverDashboard: React.FC = () => {
             </button>
           </div>
 
+          {/* Secure Signed QR Processing Toast Banner */}
+          {scanResultToast && (
+            <div className={`w-full max-w-sm mx-auto mt-4 p-4 rounded-2xl border text-center text-xs font-black animate-bounce ${
+              scanResultToast.type === 'success' ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300' : 'bg-red-950/80 border-red-500 text-red-300'
+            }`}>
+              {scanResultToast.message}
+            </div>
+          )}
+
           {/* Centered Beautiful QR Scan Card */}
           <div className="my-auto flex flex-col items-center">
             <div className="w-full max-w-sm bg-slate-900/40 border border-slate-800/80 rounded-[40px] p-8 shadow-2xl relative overflow-hidden text-center space-y-6">
@@ -467,6 +514,27 @@ export const DriverDashboard: React.FC = () => {
                 >
                   محاكاة: بطاقة مجمدة ومحظورة
                 </button>
+              </div>
+
+              {/* Secure Reverse QR Scanning Input Block */}
+              <div className="border-t border-slate-800 pt-3 space-y-2">
+                <label className="text-[9px] font-black text-amber-400 block text-right">محاكاة مسح كود راكب مشفر (Signed QR Base64)</label>
+                <div className="flex gap-2">
+                  <input 
+                    type="text" 
+                    value={passengerTokenInput}
+                    onChange={(e) => setPassengerTokenInput(e.target.value)}
+                    placeholder="ضع هنا كود الـ Base64 المنسوخ من شاشة الراكب"
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-lg p-2 text-[10px] text-white outline-none focus:border-amber-500"
+                  />
+                  <button 
+                    onClick={() => handleScanPassengerSignedQr(passengerTokenInput)}
+                    disabled={simLoading}
+                    className="bg-amber-600 hover:bg-amber-500 text-white font-black px-4 rounded-lg text-[10px] transition shrink-0"
+                  >
+                    تحقق ومسح الرمز الآمن
+                  </button>
+                </div>
               </div>
 
               <div className="flex justify-between text-[10px] text-slate-400 bg-slate-950 p-2.5 rounded-lg border border-slate-800">

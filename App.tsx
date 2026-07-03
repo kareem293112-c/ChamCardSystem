@@ -64,6 +64,27 @@ const App: React.FC = () => {
     isOnline: navigator.onLine
   });
 
+  const [isMobile, setIsMobile] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const checkIsMobile = () => {
+      // Sniff user agent for mobile operating systems
+      const userAgent = navigator.userAgent || navigator.vendor || (window as any).opera;
+      const mobileRegex = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i;
+      const isMobileUA = mobileRegex.test(userAgent);
+
+      // Check for touch capability
+      const hasTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+      
+      // Check coarse pointer (touchscreens)
+      const isCoarsePointer = window.matchMedia("(pointer: coarse)").matches;
+
+      // Combine factors for a bulletproof check
+      return isMobileUA || (hasTouch && isCoarsePointer);
+    };
+    setIsMobile(checkIsMobile());
+  }, []);
+
   useEffect(() => {
     const root = window.document.documentElement;
     root.classList.toggle('dark', isDarkMode);
@@ -1060,10 +1081,65 @@ const App: React.FC = () => {
     return <DriverDashboard />;
   }
 
+  // Enforce Mobile-Only Access for Passenger Views
+  if (isMobile === false) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center p-6 text-center select-none" dir="rtl">
+        {/* Background Ambient Glow */}
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-72 h-72 bg-emerald-500/10 rounded-full blur-3xl z-0"></div>
+        
+        <div className="relative z-10 max-w-md w-full bg-slate-900/60 border border-slate-800 backdrop-blur-xl rounded-[40px] p-8 space-y-6 shadow-2xl">
+          {/* Cyber Lock Shield Header */}
+          <div className="relative w-20 h-20 bg-emerald-950/50 border border-emerald-500/30 rounded-3xl flex items-center justify-center mx-auto shadow-lg">
+            <ShieldCheck size={40} className="text-emerald-400" />
+            <div className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
+          </div>
+
+          <div className="space-y-2">
+            <span className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-black px-4 py-1.5 rounded-full uppercase tracking-wider block w-fit mx-auto">
+              نظام الأمان السيبراني للركاب (ChamCard Shield)
+            </span>
+            <h1 className="text-xl font-black text-white mt-3">وصول آمن مقيد للهواتف المحمولة</h1>
+            <p className="text-xs text-slate-400 leading-relaxed font-bold">
+              تطبيق العميل والراكب لـ <strong className="text-emerald-400">شام كارت Pro</strong> مصمم للعمل كلياً كـ Native App على الهواتف الذكية لأسباب تتعلق بالأمان السيبراني وحماية العمليات المالية والحد من التزوير.
+            </p>
+          </div>
+
+          {/* Secure details box */}
+          <div className="bg-slate-950/80 rounded-2xl p-4 text-right border border-slate-800 space-y-2">
+            <div className="flex justify-between items-center text-[10px] text-slate-500 font-semibold">
+              <span>نوع المحاولة</span>
+              <span className="text-rose-400 font-bold">وصول غير مصرح (سطح المكتب)</span>
+            </div>
+            <div className="flex justify-between items-center text-[10px] text-slate-500 font-semibold border-t border-slate-900/50 pt-2">
+              <span>متصفحك الحالي</span>
+              <span className="text-slate-300 font-mono text-right truncate max-w-[180px]">{navigator.userAgent.split(' ')[0]}</span>
+            </div>
+            <p className="text-[9px] text-slate-400 font-bold leading-normal pt-2 border-t border-slate-900/50 text-center">
+              تم رصد المعلمات الأمنية ولم يتم التحقق من ميزة اللمس (Touch capability) أو نظام تشغيل الهواتف المحمولة.
+            </p>
+          </div>
+
+          {/* Dynamic QR to scan and continue on phone */}
+          <div className="bg-white p-3 rounded-2xl w-fit mx-auto shadow-md">
+            <img 
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(window.location.href)}`} 
+              alt="Scan to open on Mobile" 
+              className="w-28 h-28"
+            />
+          </div>
+          <p className="text-[10px] text-slate-500 font-bold">
+            امسح الرمز أعلاه بكاميرا هاتفك لفتح الرابط واستخدام محفظتك الرقمية بأمان.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (!session) return <Auth onLogin={setSession} />;
 
   return (
-    <div className="max-w-md mx-auto bg-slate-50 dark:bg-slate-950 min-h-screen relative overflow-hidden flex flex-col shadow-2xl" dir="rtl">
+    <div className="w-full max-w-md mx-auto bg-slate-50 dark:bg-slate-950 min-h-screen relative overflow-hidden flex flex-col shadow-2xl" dir="rtl">
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
       <main className="flex-1 relative overflow-y-auto no-scrollbar">{renderView()}</main>
       {['home', 'cards', 'offers', 'profile', 'qr_payment', 'transactions_history'].includes(activeView) && (
@@ -1286,6 +1362,56 @@ const QrPaymentView: React.FC<{
   const [buses, setBuses] = useState<any[]>([]);
   const [selectedBusId, setSelectedBusId] = useState<string>('bus_M1');
 
+  // Secure QR Generation state
+  const [payMode, setPayMode] = useState<'scan' | 'generate'>('scan');
+  const [signedQr, setSignedQr] = useState<string>('');
+  const [loadingQr, setLoadingQr] = useState<boolean>(false);
+  const [qrCountdown, setQrCountdown] = useState<number>(60);
+
+  const fetchSignedQr = () => {
+    if (!selectedCardId) return;
+    setLoadingQr(true);
+    const session = authStore.getSession();
+    fetch(`/api/cards/${selectedCardId}/signed-qr`, {
+      headers: {
+        'Authorization': `Bearer ${session?.token || ''}`
+      }
+    })
+    .then(res => {
+      if (res.ok) return res.json();
+      throw new Error("Failed to load secure QR");
+    })
+    .then(data => {
+      setSignedQr(data.qrToken);
+      setQrCountdown(60);
+      setLoadingQr(false);
+    })
+    .catch(err => {
+      console.error(err);
+      triggerToast("فشل توليد الرمز الآمن للبطاقة", "error");
+      setLoadingQr(false);
+    });
+  };
+
+  useEffect(() => {
+    let timer: any;
+    if (payMode === 'generate') {
+      fetchSignedQr();
+      timer = setInterval(() => {
+        setQrCountdown(prev => {
+          if (prev <= 1) {
+            fetchSignedQr();
+            return 60;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    } else {
+      setSignedQr('');
+    }
+    return () => clearInterval(timer);
+  }, [payMode, selectedCardId]);
+
   useEffect(() => {
     fetch('/api/buses/locations')
       .then(res => res.json())
@@ -1361,7 +1487,15 @@ const QrPaymentView: React.FC<{
   };
 
   useEffect(() => {
-    startCameraStream(activeCamera);
+    if (payMode === 'scan') {
+      startCameraStream(activeCamera);
+    } else {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+      setCameraState('inactive');
+    }
 
     // Dynamic FPS oscillation for high realism
     const fpsInterval = setInterval(() => {
@@ -1374,7 +1508,7 @@ const QrPaymentView: React.FC<{
         streamRef.current.getTracks().forEach(track => track.stop());
       }
     };
-  }, [activeCamera]);
+  }, [activeCamera, payMode]);
 
   const toggleFlashLight = async () => {
     const nextFlashState = !isFlashActive;
@@ -1416,7 +1550,7 @@ const QrPaymentView: React.FC<{
     setIsCapturing(true);
 
     // Auto trigger hardware stream request if not active
-    if (cameraState !== 'active') {
+    if (cameraState !== 'active' && payMode === 'scan') {
       startCameraStream(activeCamera).catch(() => {});
     }
 
@@ -1566,14 +1700,14 @@ const QrPaymentView: React.FC<{
 
   useEffect(() => {
     let timeout: any;
-    if (cameraState === 'error' && payStep === 'scan' && !isCapturing) {
+    if (cameraState === 'error' && payStep === 'scan' && !isCapturing && payMode === 'scan') {
       // Auto trigger simulation after 3 seconds for smooth preview demo flow
       timeout = setTimeout(() => {
         triggerSelfScan();
       }, 3000);
     }
     return () => clearTimeout(timeout);
-  }, [cameraState, payStep, isCapturing]);
+  }, [cameraState, payStep, isCapturing, payMode]);
 
   if (payStep === 'done' && paymentDetails) {
     return (
@@ -1618,6 +1752,22 @@ const QrPaymentView: React.FC<{
         <div className="w-12"></div>
       </div>
 
+      {/* Mode Switch Tabs */}
+      <div className="flex bg-slate-100 dark:bg-slate-900 p-1 rounded-2xl mb-6">
+        <button 
+          onClick={() => setPayMode('scan')} 
+          className={`flex-1 py-3 text-xs font-black rounded-xl transition ${payMode === 'scan' ? 'bg-white dark:bg-slate-800 text-emerald-600 dark:text-white shadow-sm' : 'text-slate-400 dark:text-slate-500'}`}
+        >
+          مسح ملصق الحافلة (كاميرا)
+        </button>
+        <button 
+          onClick={() => setPayMode('generate')} 
+          className={`flex-1 py-3 text-xs font-black rounded-xl transition ${payMode === 'generate' ? 'bg-white dark:bg-slate-800 text-emerald-600 dark:text-white shadow-sm' : 'text-slate-400 dark:text-slate-500'}`}
+        >
+          عرض كود بطاقتي (القارئ)
+        </button>
+      </div>
+
       {/* Styled Source Account Selector */}
       <div className="bg-white dark:bg-slate-900 p-4 rounded-[28px] border border-slate-100 dark:border-slate-800 shadow-sm text-right mb-6">
         <p className="text-[10px] font-black text-slate-400 mb-2 uppercase">محفظة الدفع النشطة</p>
@@ -1641,110 +1791,152 @@ const QrPaymentView: React.FC<{
         )}
       </div>
 
-      {/* Dynamic Route/Bus Selector */}
-      <div className="bg-white dark:bg-slate-900 p-4 rounded-[28px] border border-slate-100 dark:border-slate-800 shadow-sm text-right mb-6">
-        <p className="text-[10px] font-black text-slate-400 mb-2 uppercase">محاكاة مسح ملصق الحافلة (الخط والتعرفة)</p>
-        <select 
-          value={selectedBusId} 
-          onChange={(e) => setSelectedBusId(e.target.value)}
-          className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl font-bold text-xs pr-4 dark:text-white outline-none cursor-pointer"
-        >
-          {buses.map(b => (
-             <option key={b.id} value={b.id} className="dark:bg-slate-900">
-               {b.route_name} - التعرفة: {b.ticket_price.toLocaleString()} ل.س
-             </option>
-          ))}
-        </select>
-      </div>
-
-      {/* 100% REALISTIC QR SCANNER VIEWFINDER */}
-      <div 
-        onClick={() => {
-          if (cameraState !== 'active') {
-            startCameraStream(activeCamera);
-          }
-        }}
-        className="relative mx-auto w-80 h-80 rounded-[44px] overflow-hidden border-2 border-emerald-500/90 shadow-[0_0_50px_rgba(16,185,129,0.3)] bg-slate-950 mb-6 flex flex-col justify-center items-center group cursor-pointer"
-      >
-        
-        {/* Soft Ambient Core Pulse */}
-        {cameraState !== 'error' && (
-          <div className="absolute w-60 h-60 rounded-full bg-emerald-500/10 blur-3xl animate-glow-pulse pointer-events-none z-0"></div>
-        )}
-
-        {/* 1. REAL LIVE CAMERA VIEWSTREAM ELEMENT */}
-        {cameraState === 'active' ? (
-          <video 
-            ref={videoRef} 
-            className="absolute inset-0 w-full h-full object-cover z-0 select-none pointer-events-none" 
-            playsInline 
-            muted
-            autoPlay
-          />
-        ) : cameraState === 'loading' ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-emerald-400 z-10 select-none pointer-events-none">
-            <Loader2 className="animate-spin text-emerald-500 mb-2" size={36} />
-            <span className="text-xs font-bold tracking-wider">جاري تشغيل الكاميرا...</span>
-          </div>
-        ) : (
-          /* Clean minimal state if blocked or inactive */
-          <div className="absolute inset-0 w-full h-full bg-slate-950 flex flex-col items-center justify-center p-6 z-0">
-            <div className="relative z-10 flex flex-col items-center justify-center text-center space-y-2 select-none">
-              <div className="w-14 h-14 rounded-full bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20">
-                {cameraState === 'error' ? (
-                  <CameraOff size={24} className="text-rose-400" />
-                ) : (
-                  <Camera size={24} className="text-emerald-400" />
-                )}
+      {payMode === 'generate' ? (
+        <div className="space-y-6 animate-in fade-in duration-300">
+          <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-[32px] p-6 shadow-md relative overflow-hidden">
+            <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mb-4">كود عبور مشفر بميزة الحماية الثنائية</p>
+            
+            {loadingQr ? (
+              <div className="w-56 h-56 mx-auto flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 rounded-2xl border border-slate-100 dark:border-slate-800">
+                <Loader2 className="animate-spin text-emerald-600 w-10 h-10 mb-2" />
+                <span className="text-[10px] font-bold text-slate-400">جاري التشفير والتوقيع...</span>
               </div>
-              <p className="text-xs font-black text-slate-200">
-                {cameraState === 'error' ? 'الرجاء السماح بصلاحية الكاميرا' : 'عدسة الكاميرا النشطة'}
-              </p>
-              <p className="text-[10px] text-slate-400 font-bold max-w-[200px] leading-relaxed">
-                {cameraState === 'error' ? 'يرجى تمكين الكاميرا من إعدادات المتصفح للمسح المباشر.' : 'انقر للدفع أو تمكين الكاميرا'}
-              </p>
+            ) : signedQr ? (
+              <div className="relative bg-white p-4 rounded-2xl w-fit mx-auto shadow-lg border border-slate-100">
+                <img 
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(signedQr)}`} 
+                  alt="Signed Card Token" 
+                  className="w-52 h-52 object-contain"
+                />
+                <div className="absolute inset-0 m-auto w-10 h-10 bg-slate-950 rounded-xl border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-md">
+                  <ShieldCheck size={20} />
+                </div>
+              </div>
+            ) : (
+              <div className="w-56 h-56 mx-auto flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 rounded-2xl">
+                <Loader2 className="text-emerald-500 mb-2" size={32} />
+                <span className="text-xs font-bold text-slate-400">فشل في توليد الكود</span>
+              </div>
+            )}
+
+            <div className="mt-4 flex items-center justify-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
+              <span className="text-xs font-black dark:text-white">يتغير الكود تلقائياً خلال: <strong className="text-emerald-500 font-mono text-sm">{qrCountdown}ث</strong></span>
             </div>
+
+            <p className="text-[10px] text-slate-400 font-bold mt-4 px-4 leading-normal">
+              يحتوي هذا الرمز على توقيع رقمي مشفر وطابع زمني دقيق لمنع النسخ أو التلاعب. اعرضه على قارئ السائق لإتمام الدفع بأمان.
+            </p>
           </div>
-        )}
-
-        {/* 2. DYNAMIC CORNER TARGET BRACKETS */}
-        <div className="absolute inset-8 pointer-events-none z-10">
-          <div className="absolute top-0 left-0 w-6 h-6 border-t-[4px] border-l-[4px] border-emerald-500 rounded-tl-xl shadow-[0_0_8px_#10b981]"></div>
-          <div className="absolute top-0 right-0 w-6 h-6 border-t-[4px] border-r-[4px] border-emerald-500 rounded-tr-xl shadow-[0_0_8px_#10b981]"></div>
-          <div className="absolute bottom-0 left-0 w-6 h-6 border-b-[4px] border-l-[4px] border-emerald-500 rounded-bl-xl shadow-[0_0_8px_#10b981]"></div>
-          <div className="absolute bottom-0 right-0 w-6 h-6 border-b-[4px] border-r-[4px] border-emerald-500 rounded-br-xl shadow-[0_0_8px_#10b981]"></div>
         </div>
+      ) : (
+        <>
+          {/* Dynamic Route/Bus Selector */}
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-[28px] border border-slate-100 dark:border-slate-800 shadow-sm text-right mb-6">
+            <p className="text-[10px] font-black text-slate-400 mb-2 uppercase">محاكاة مسح ملصق الحافلة (الخط والتعرفة)</p>
+            <select 
+              value={selectedBusId} 
+              onChange={(e) => setSelectedBusId(e.target.value)}
+              className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl font-bold text-xs pr-4 dark:text-white outline-none cursor-pointer"
+            >
+              {buses.map(b => (
+                 <option key={b.id} value={b.id} className="dark:bg-slate-900">
+                   {b.route_name} - التعرفة: {b.ticket_price.toLocaleString()} ل.س
+                 </option>
+              ))}
+            </select>
+          </div>
 
-        {/* 3. CENTER GRAPHIC FOCUS BOUNDS */}
-        <div className="absolute w-24 h-24 border border-emerald-500/25 rounded-2xl pointer-events-none z-10 flex items-center justify-center animate-pulse">
-          <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping"></div>
-        </div>
+          {/* 100% REALISTIC QR SCANNER VIEWFINDER */}
+          <div 
+            onClick={() => {
+              if (cameraState !== 'active') {
+                startCameraStream(activeCamera);
+              }
+            }}
+            className="relative mx-auto w-80 h-80 rounded-[44px] overflow-hidden border-2 border-emerald-500/90 shadow-[0_0_50px_rgba(16,185,129,0.3)] bg-slate-950 mb-6 flex flex-col justify-center items-center group cursor-pointer"
+          >
+            
+            {/* Soft Ambient Core Pulse */}
+            {cameraState !== 'error' && (
+              <div className="absolute w-60 h-60 rounded-full bg-emerald-500/10 blur-3xl animate-glow-pulse pointer-events-none z-0"></div>
+            )}
 
-        {/* 4. SMOOTH LASER SCAN LINE */}
-        {isScanningActive && cameraState === 'active' && (
-          <div className={`absolute left-[20px] right-[20px] h-[3px] bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_20px_#10b981,0_0_6px_#34d399] z-20 pointer-events-none ${isCapturing ? 'animate-scan-fast top-[10px]' : 'animate-scan top-[20px]'}`}></div>
-        )}
+            {/* 1. REAL LIVE CAMERA VIEWSTREAM ELEMENT */}
+            {cameraState === 'active' ? (
+              <video 
+                ref={videoRef} 
+                className="absolute inset-0 w-full h-full object-cover z-0 select-none pointer-events-none" 
+                playsInline 
+                muted
+                autoPlay
+              />
+            ) : cameraState === 'loading' ? (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-emerald-400 z-10 select-none pointer-events-none">
+                <Loader2 className="animate-spin text-emerald-500 mb-2" size={36} />
+                <span className="text-xs font-bold tracking-wider">جاري تشغيل الكاميرا...</span>
+              </div>
+            ) : (
+              /* Clean minimal state if blocked or inactive */
+              <div className="absolute inset-0 w-full h-full bg-slate-950 flex flex-col items-center justify-center p-6 z-0">
+                <div className="relative z-10 flex flex-col items-center justify-center text-center space-y-2 select-none">
+                  <div className="w-14 h-14 rounded-full bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20">
+                    {cameraState === 'error' ? (
+                      <CameraOff size={24} className="text-rose-400" />
+                    ) : (
+                      <Camera size={24} className="text-emerald-400" />
+                    )}
+                  </div>
+                  <p className="text-xs font-black text-slate-200">
+                    {cameraState === 'error' ? 'الرجاء السماح بصلاحية الكاميرا' : 'عدسة الكاميرا النشطة'}
+                  </p>
+                  <p className="text-[10px] text-slate-400 font-bold max-w-[200px] leading-relaxed">
+                    {cameraState === 'error' ? 'يرجى تمكين الكاميرا من إعدادات المتصفح للمسح المباشر.' : 'انقر للدفع أو تمكين الكاميرا'}
+                  </p>
+                </div>
+              </div>
+            )}
 
-        {/* Simulated Virtual Flash overlay */}
-        {isFlashActive && (
-          <div className="absolute inset-0 bg-white/20 select-none pointer-events-none z-10 mix-blend-screen transition-all duration-200"></div>
-        )}
-      </div>
+            {/* 2. DYNAMIC CORNER TARGET BRACKETS */}
+            <div className="absolute inset-8 pointer-events-none z-10">
+              <div className="absolute top-0 left-0 w-6 h-6 border-t-[4px] border-l-[4px] border-emerald-500 rounded-tl-xl shadow-[0_0_8px_#10b981]"></div>
+              <div className="absolute top-0 right-0 w-6 h-6 border-t-[4px] border-r-[4px] border-emerald-500 rounded-tr-xl shadow-[0_0_8px_#10b981]"></div>
+              <div className="absolute bottom-0 left-0 w-6 h-6 border-b-[4px] border-l-[4px] border-emerald-500 rounded-bl-xl shadow-[0_0_8px_#10b981]"></div>
+              <div className="absolute bottom-0 right-0 w-6 h-6 border-b-[4px] border-r-[4px] border-emerald-500 rounded-br-xl shadow-[0_0_8px_#10b981]"></div>
+            </div>
 
-      {/* VIEWFINDER UTILITY RAILS (TORCH / MIRROR CAMERA) */}
-      <div className="flex justify-center gap-4 mb-6">
-        <button 
-          onClick={toggleCameraDirection} 
-          className="flex items-center gap-2 px-5 py-3 rounded-full text-xs font-black transition-all bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-100 dark:border-slate-700 active:scale-95"
-        >
-          <RefreshCw size={14} />
-          {activeCamera === 'back' ? 'الكاميرا الأمامية' : 'الكاميرا الخلفية'}
-        </button>
-      </div>
+            {/* 3. CENTER GRAPHIC FOCUS BOUNDS */}
+            <div className="absolute w-24 h-24 border border-emerald-500/25 rounded-2xl pointer-events-none z-10 flex items-center justify-center animate-pulse">
+              <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping"></div>
+            </div>
 
-      <p className="text-slate-400 dark:text-slate-300 font-bold text-xs leading-relaxed px-6 mb-8">
-        وجه عدسة الهاتف نحو رمز الاستجابة السريع (QR) المعلق داخل الحافلة أو باص النقل العام ليتم التعرف على معبر التذكرة فوراً.
-      </p>
+            {/* 4. SMOOTH LASER SCAN LINE */}
+            {isScanningActive && cameraState === 'active' && (
+              <div className={`absolute left-[20px] right-[20px] h-[3px] bg-gradient-to-r from-transparent via-emerald-400 to-transparent shadow-[0_0_20px_#10b981,0_0_6px_#34d399] z-20 pointer-events-none ${isCapturing ? 'animate-scan-fast top-[10px]' : 'animate-scan top-[20px]'}`}></div>
+            )}
+
+            {/* Simulated Virtual Flash overlay */}
+            {isFlashActive && (
+              <div className="absolute inset-0 bg-white/20 select-none pointer-events-none z-10 mix-blend-screen transition-all duration-200"></div>
+            )}
+          </div>
+
+          {/* VIEWFINDER UTILITY RAILS (TORCH / MIRROR CAMERA) */}
+          <div className="flex justify-center gap-4 mb-6">
+            <button 
+              onClick={toggleCameraDirection} 
+              className="flex items-center gap-2 px-5 py-3 rounded-full text-xs font-black transition-all bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-100 dark:border-slate-700 active:scale-95"
+            >
+              <RefreshCw size={14} />
+              {activeCamera === 'back' ? 'الكاميرا الأمامية' : 'الكاميرا الخلفية'}
+            </button>
+          </div>
+
+          <p className="text-slate-400 dark:text-slate-300 font-bold text-xs leading-relaxed px-6 mb-8">
+            وجه عدسة الهاتف نحو رمز الاستجابة السريع (QR) المعلق داخل الحافلة أو باص النقل العام ليتم التعرف على معبر التذكرة فوراً.
+          </p>
+        </>
+      )}
     </div>
   );
 };
