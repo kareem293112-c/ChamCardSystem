@@ -1150,6 +1150,59 @@ async function startServer() {
     }
   });
 
+  // Delete Card
+  app.delete("/api/cards/:id", async (req, res) => {
+    try {
+      const phone = extractUserPhone(req);
+      if (!phone) return res.status(401).json({ message: "غير مصرح" });
+
+      const cardId = req.params.id;
+      const cardRef = db.collection('cards').doc(cardId);
+      const cardDoc = await cardRef.get();
+
+      if (!cardDoc.exists) {
+        return res.status(404).json({ message: "البطاقة غير موجودة" });
+      }
+
+      const cardData = cardDoc.data();
+      if (cardData && cardData.userId !== phone) {
+        return res.status(403).json({ message: "غير مسموح لك بحذف هذه البطاقة" });
+      }
+
+      await cardRef.delete();
+      res.json({ message: "تم حذف البطاقة بنجاح" });
+    } catch (err) {
+      res.status(500).json({ message: "فشل حذف البطاقة." });
+    }
+  });
+
+  // Rename Card
+  app.patch("/api/cards/:id", async (req, res) => {
+    try {
+      const phone = extractUserPhone(req);
+      if (!phone) return res.status(401).json({ message: "غير مصرح" });
+
+      const cardId = req.params.id;
+      const { alias } = req.body;
+      const cardRef = db.collection('cards').doc(cardId);
+      const cardDoc = await cardRef.get();
+
+      if (!cardDoc.exists) {
+        return res.status(404).json({ message: "البطاقة غير موجودة" });
+      }
+
+      const cardData = cardDoc.data();
+      if (cardData && cardData.userId !== phone) {
+        return res.status(403).json({ message: "غير مسموح لك بتعديل هذه البطاقة" });
+      }
+
+      await cardRef.update({ alias });
+      res.json({ ...cardData, alias });
+    } catch (err) {
+      res.status(500).json({ message: "فشل تعديل اسم البطاقة." });
+    }
+  });
+
   // Offers API
   app.get("/api/offers", async (req, res) => {
     try {

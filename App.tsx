@@ -268,7 +268,7 @@ const App: React.FC = () => {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed.slice(0, 1);
+          return parsed;
         }
       } catch (e) {
         console.error(e);
@@ -547,24 +547,7 @@ const App: React.FC = () => {
     }
   }, [system.isBusy]);
 
-  const ActionView = ({ title, subtitle, icon, children, onConfirm, confirmText = "تأكيد العملية", hideConfirm = false, onBack }: any) => (
-    <div className="p-8 animate-in slide-in-from-bottom duration-500 pt-16 flex flex-col min-h-screen">
-      <button onClick={onBack || (() => setActiveView('home'))} className="w-12 h-12 bg-white dark:bg-slate-800 rounded-2xl flex items-center justify-center shadow-sm mb-8"><ArrowLeft className="rotate-180 dark:text-white" /></button>
-      <div className="flex items-center gap-6 mb-12">
-        <div className="w-20 h-20 bg-emerald-600/10 text-emerald-600 rounded-[30px] flex items-center justify-center shrink-0">{icon}</div>
-        <div className="text-right">
-          <h2 className="text-3xl font-black dark:text-white leading-tight">{title}</h2>
-          <p className="text-slate-400 font-bold mt-1 text-sm">{subtitle}</p>
-        </div>
-      </div>
-      <div className="flex-1 space-y-8">{children}</div>
-      {!hideConfirm && (
-        <div className="mt-12 pb-10">
-          <button onClick={onConfirm} className="w-full bg-emerald-600 text-white font-black py-6 rounded-[32px] shadow-2xl active:scale-95 transition-all text-xl">{confirmText}</button>
-        </div>
-      )}
-    </div>
-  );
+
 
   const renderView = () => {
     switch(activeView) {
@@ -863,12 +846,68 @@ const App: React.FC = () => {
             <CardList 
               cards={cards} 
               onDeleteCard={(id) => {
-                setCards(prev => prev.filter(c => c.id !== id));
-                triggerToast('تم حذف البطاقة بنجاح', 'success');
+                if (session?.token) {
+                  fetch(`/api/cards/${id}`, {
+                    method: 'DELETE',
+                    headers: {
+                      'Authorization': `Bearer ${session.token}`
+                    }
+                  })
+                  .then(res => {
+                    if (res.ok) {
+                      setCards(prev => prev.filter(c => c.id !== id));
+                      triggerToast('تم حذف البطاقة بنجاح', 'success');
+                      offlineDb.get('dashboard_data').then(cached => {
+                        if (cached && cached.cards) {
+                          cached.cards = cached.cards.filter((c: any) => c.id !== id);
+                          offlineDb.set('dashboard_data', cached).catch(() => {});
+                        }
+                      }).catch(() => {});
+                    } else {
+                      triggerToast('فشل حذف البطاقة من الخادم', 'error');
+                    }
+                  })
+                  .catch(() => {
+                    setCards(prev => prev.filter(c => c.id !== id));
+                    triggerToast('تم الحفظ محلياً (وضع العمل دون اتصال)', 'success');
+                  });
+                } else {
+                  setCards(prev => prev.filter(c => c.id !== id));
+                  triggerToast('تم حذف البطاقة بنجاح', 'success');
+                }
               }} 
               onRenameCard={(id, newAlias) => {
-                setCards(prev => prev.map(c => c.id === id ? { ...c, alias: newAlias } : c));
-                triggerToast('تم تعديل اسم البطاقة بنجاح', 'success');
+                if (session?.token) {
+                  fetch(`/api/cards/${id}`, {
+                    method: 'PATCH',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${session.token}`
+                    },
+                    body: JSON.stringify({ alias: newAlias })
+                  })
+                  .then(res => {
+                    if (res.ok) {
+                      setCards(prev => prev.map(c => c.id === id ? { ...c, alias: newAlias } : c));
+                      triggerToast('تم تعديل اسم البطاقة بنجاح', 'success');
+                      offlineDb.get('dashboard_data').then(cached => {
+                        if (cached && cached.cards) {
+                          cached.cards = cached.cards.map((c: any) => c.id === id ? { ...c, alias: newAlias } : c);
+                          offlineDb.set('dashboard_data', cached).catch(() => {});
+                        }
+                      }).catch(() => {});
+                    } else {
+                      triggerToast('فشل تعديل اسم البطاقة بالخادم', 'error');
+                    }
+                  })
+                  .catch(() => {
+                    setCards(prev => prev.map(c => c.id === id ? { ...c, alias: newAlias } : c));
+                    triggerToast('تم التعديل محلياً (وضع العمل دون اتصال)', 'success');
+                  });
+                } else {
+                  setCards(prev => prev.map(c => c.id === id ? { ...c, alias: newAlias } : c));
+                  triggerToast('تم تعديل اسم البطاقة بنجاح', 'success');
+                }
               }}
               onMakePrimary={(id) => {
                 setCards(prev => {
@@ -2205,6 +2244,27 @@ const QrPaymentView: React.FC<{
     </div>
   );
 };
+
+const ActionView = ({ title, subtitle, icon, children, onConfirm, confirmText = "تأكيد العملية", hideConfirm = false, onBack }: any) => (
+  <div className="p-8 animate-in slide-in-from-bottom duration-500 pt-16 flex flex-col min-h-screen">
+    <button onClick={onBack} className="w-12 h-12 bg-white dark:bg-slate-800 rounded-2xl flex items-center justify-center shadow-sm mb-8">
+      <ArrowLeft className="rotate-180 dark:text-white" />
+    </button>
+    <div className="flex items-center gap-6 mb-12">
+      <div className="w-20 h-20 bg-emerald-600/10 text-emerald-600 rounded-[30px] flex items-center justify-center shrink-0">{icon}</div>
+      <div className="text-right">
+        <h2 className="text-3xl font-black dark:text-white leading-tight">{title}</h2>
+        <p className="text-slate-400 font-bold mt-1 text-sm">{subtitle}</p>
+      </div>
+    </div>
+    <div className="flex-1 space-y-8">{children}</div>
+    {!hideConfirm && (
+      <div className="mt-12 pb-10">
+        <button onClick={onConfirm} className="w-full bg-emerald-600 text-white font-black py-6 rounded-[32px] shadow-2xl active:scale-95 transition-all text-xl">{confirmText}</button>
+      </div>
+    )}
+  </div>
+);
 
 const NavTab = ({ active, icon, label, onClick }: any) => (
   <button onClick={onClick} className={`flex flex-col items-center justify-center w-1/5 h-12 transition-all ${active ? 'text-emerald-600' : 'text-slate-400'}`}>
