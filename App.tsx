@@ -8,7 +8,7 @@ import {
   CheckCircle, XCircle, Clock, ChevronLeft, Tag, Trash, Plus, Gift
 } from 'lucide-react';
 import { QRCodeCanvas } from 'qrcode.react';
-import { Html5QrcodeScanner } from 'html5-qrcode';
+import { Html5Qrcode } from 'html5-qrcode';
 import { View, Card, AuthSession, AppAction, SystemState, RechargeRequest, Transaction } from './types';
 import { authStore } from './store/authStore';
 import { rechargeService } from './services/rechargeService';
@@ -27,6 +27,7 @@ import AddCardModal from './components/AddCardModal';
 import TransactionsHistory from './components/TransactionsHistory';
 import { NfcSyncModal } from './components/NfcSyncModal';
 import { DriverDashboard } from './components/DriverDashboard';
+import AdminApp from './AdminApp';
 
 // الصورة الأصلية التي قدمها المستخدم (الباركود مع الشعار مدمجين)
 const ORIGINAL_QR_IMAGE = "https://images2.imgbox.com/6c/f5/lYn1Qe4c_o.png";
@@ -520,6 +521,10 @@ const App: React.FC = () => {
 
   const renderView = () => {
     switch(activeView) {
+      case 'admin_login':
+        return <AdminApp />;
+      case 'driver':
+        return <DriverDashboard />;
       case 'topup':
         if (topupStep === 'info') {
           return (
@@ -991,6 +996,12 @@ const App: React.FC = () => {
                    <div><h1 className="text-xl font-black dark:text-white">أهلاً، {session?.user.fullName.split(' ')[0]}</h1></div>
                 </div>
                 <div className="flex gap-2">
+                   {/* Developer Navigation Hub */}
+                   <div className="fixed bottom-4 right-4 z-50 flex gap-2">
+                      <button onClick={() => setActiveView('home')} className="p-3 bg-slate-800 text-white rounded-full shadow-lg">🏠</button>
+                      <button onClick={() => setActiveView('driver')} className="p-3 bg-emerald-600 text-white rounded-full shadow-lg">🚌</button>
+                      <button onClick={() => setActiveView('admin_login')} className="p-3 bg-amber-600 text-white rounded-full shadow-lg">🔐</button>
+                   </div>
                    {session?.role === 'admin' && (
                      <button onClick={() => setActiveView('admin_requests')} className="w-12 h-12 bg-amber-100 text-amber-600 rounded-2xl flex items-center justify-center shadow-sm relative">
                         <ShieldCheck size={24} />
@@ -1083,8 +1094,8 @@ const App: React.FC = () => {
     return <DriverDashboard />;
   }
 
-  // Enforce Mobile-Only Access for Passenger Views
-  if (isMobile === false) {
+  // Enforce Mobile-Only Access for Passenger Views (Disabled for Demo)
+  if (false && isMobile === false) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center p-6 text-center select-none" dir="rtl">
         {/* Background Ambient Glow */}
@@ -1115,7 +1126,7 @@ const App: React.FC = () => {
             </div>
             <div className="flex justify-between items-center text-[10px] text-slate-500 font-semibold border-t border-slate-900/50 pt-2">
               <span>متصفحك الحالي</span>
-              <span className="text-slate-300 font-mono text-right truncate max-w-[180px]">{navigator.userAgent.split(' ')[0]}</span>
+              <span className="text-slate-300 font-mono text-right truncate max-w-[180px]">{(navigator?.userAgent || '').split(' ')[0]}</span>
             </div>
             <p className="text-[9px] text-slate-400 font-bold leading-normal pt-2 border-t border-slate-900/50 text-center">
               تم رصد المعلمات الأمنية ولم يتم التحقق من ميزة اللمس (Touch capability) أو نظام تشغيل الهواتف المحمولة.
@@ -1125,7 +1136,7 @@ const App: React.FC = () => {
           {/* Dynamic QR to scan and continue on phone */}
           <div className="bg-white p-3 rounded-2xl w-fit mx-auto shadow-md">
             <QRCodeCanvas 
-              value={window.location.href} 
+              value={typeof window !== 'undefined' ? window.location.href : 'https://chamcard.pro'} 
               size={112}
               level="H"
             />
@@ -1441,7 +1452,7 @@ const QrPaymentView: React.FC<{
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const scannerRef = useRef<Html5QrcodeScanner | null>(null);
+  const scannerRef = useRef<Html5Qrcode | null>(null);
 
   // High-fidelity web audio scanner beep synthesizer (produces realistic physical transit device beep)
   const playPhysicalBeep = () => {
@@ -1468,19 +1479,47 @@ const QrPaymentView: React.FC<{
     try {
         console.log("Scanned QR data:", data);
         const session = authStore.getSession();
-        const primaryCard = cards.find(c => c.is_primary);
+        
+        let targetTripId = data;
+        let targetBusId = undefined;
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed && typeof parsed === 'object') {
+            if (parsed.tripId) targetTripId = parsed.tripId;
+            if (parsed.busId) targetBusId = parsed.busId;
+          }
+        } catch (e) {
+          // not JSON, use raw data as tripId
+        }
+
+        const primaryCard = cards.find(c => c.is_primary) || cards[0];
+        if (!primaryCard) {
+            triggerToast("لا توجد بطاقات نشطة لإكمال الدفع.", 'error');
+            return;
+        }
+
         const response = await fetch('/api/trips/pay-qr', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${session ? btoa(session.user.phone + '||' + Date.now()) : ''}`
             },
-            body: JSON.stringify({ tripId: data, cardId: primaryCard?.id })
+            body: JSON.stringify({ 
+                tripId: targetTripId, 
+                busId: targetBusId || selectedBusId, 
+                cardId: primaryCard.id 
+            })
         });
         const result = await response.json();
         if (result.success) {
             playPhysicalBeep();
             triggerToast("تم الدفع بنجاح!", 'success');
+            if (result.balance !== undefined) {
+                setCards(prev => prev.map(c => c.id === primaryCard.id ? { ...c, balance: result.balance } : c));
+            }
+            if (result.transaction) {
+                setTransactions(prev => [result.transaction, ...prev]);
+            }
         } else {
             triggerToast(result.message || "فشل الدفع", 'error');
         }
@@ -1489,34 +1528,77 @@ const QrPaymentView: React.FC<{
     }
   };
 
+  const handlePaymentRef = useRef(handlePayment);
+  useEffect(() => {
+    handlePaymentRef.current = handlePayment;
+  }, [handlePayment]);
+
   const startScanner = useCallback(() => {
-    setCameraState('loading');
-    const scanner = new Html5QrcodeScanner(
-      "qr-reader",
-      { fps: 10, qrbox: { width: 250, height: 250 } },
-      /* verbose= */ false
-    );
-    scanner.render(
-      (decodedText) => {
-        handlePayment(decodedText);
-        stopScanner();
-      },
-      (errorMessage) => {
-        // Handle error (often just QR not found)
+    try {
+      if (!document.getElementById("qr-reader")) {
+        console.warn("qr-reader element not found in DOM yet");
+        return;
       }
-    );
-    scannerRef.current = scanner;
-    setCameraState('active');
+      setCameraState('loading');
+      
+      if (scannerRef.current) {
+        try {
+          if (scannerRef.current.isScanning) {
+            scannerRef.current.stop().catch(() => {});
+          }
+        } catch (e) {
+          console.warn("Error pre-clearing scanner", e);
+        }
+        scannerRef.current = null;
+      }
+
+      const scanner = new Html5Qrcode("qr-reader");
+      scannerRef.current = scanner;
+
+      scanner.start(
+        { facingMode: "environment" },
+        {
+          fps: 10,
+          qrbox: { width: 250, height: 250 }
+        },
+        (decodedText) => {
+          handlePaymentRef.current(decodedText);
+          stopScanner();
+        },
+        () => {
+          // Handle parse error silently
+        }
+      )
+      .then(() => {
+        setCameraState('active');
+      })
+      .catch(() => {
+        setCameraState('error');
+      });
+    } catch (err) {
+      console.error("Failed to start QR scanner", err);
+      setCameraState('error');
+    }
   }, []);
 
   const stopScanner = useCallback(() => {
     if (scannerRef.current) {
-        scannerRef.current.clear().then(() => {
-            scannerRef.current = null;
-            setCameraState('inactive');
-        }).catch(err => console.error("Error clearing scanner", err));
-    } else {
+      const scanner = scannerRef.current;
+      if (scanner.isScanning) {
+        scanner.stop().then(() => {
+          scannerRef.current = null;
+          setCameraState('inactive');
+        }).catch(err => {
+          console.error("Error stopping scanner", err);
+          scannerRef.current = null;
+          setCameraState('inactive');
+        });
+      } else {
+        scannerRef.current = null;
         setCameraState('inactive');
+      }
+    } else {
+      setCameraState('inactive');
     }
   }, []);
 
@@ -1559,8 +1641,11 @@ const QrPaymentView: React.FC<{
   };
 
   useEffect(() => {
+    let t: any = null;
     if (payMode === 'scan') {
-      startScanner();
+      t = setTimeout(() => {
+        startScanner();
+      }, 100);
     } else {
       stopScanner();
     }
@@ -1571,12 +1656,22 @@ const QrPaymentView: React.FC<{
     }, 1500);
 
     return () => {
+      if (t) clearTimeout(t);
       clearInterval(fpsInterval);
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
+      if (scannerRef.current) {
+        try {
+          if (scannerRef.current.isScanning) {
+            scannerRef.current.stop().catch(() => {});
+          }
+        } catch (e) {
+          console.warn("Error clearing scanner on unmount", e);
+        }
+      }
     };
-  }, [activeCamera, payMode]);
+  }, [activeCamera, payMode, startScanner, stopScanner]);
 
   const toggleFlashLight = async () => {
     const nextFlashState = !isFlashActive;
@@ -1917,7 +2012,7 @@ const QrPaymentView: React.FC<{
 
           {/* 100% REALISTIC QR SCANNER VIEWFINDER */}
           <div 
-            id="qr-reader"
+            id="qr-viewfinder-container"
             className="relative mx-auto w-80 h-80 rounded-[44px] overflow-hidden border-2 border-emerald-500/90 shadow-[0_0_50px_rgba(16,185,129,0.3)] bg-slate-950 mb-6 flex flex-col justify-center items-center group cursor-pointer"
             onClick={() => {
               if (cameraState !== 'active') {
@@ -1925,6 +2020,8 @@ const QrPaymentView: React.FC<{
               }
             }}
           >
+            {/* The actual HTML5 Qrcode target container MUST be empty and isolated */}
+            <div id="qr-reader" className="absolute inset-0 w-full h-full z-0 overflow-hidden [&>video]:object-cover [&>video]:w-full [&>video]:h-full select-none pointer-events-none"></div>
             
             {/* Soft Ambient Core Pulse */}
             {cameraState !== 'error' && (

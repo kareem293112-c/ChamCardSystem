@@ -397,8 +397,12 @@ export const DriverDashboard: React.FC = () => {
                 <Bus size={20} />
               </div>
               <div className="text-right">
-                <span className="text-[10px] text-slate-400 font-bold block">{activeTrip.routeName}</span>
-                <span className="text-[9px] text-slate-500 font-semibold block">لوحة رقم: {activeTrip.plateNumber}</span>
+                {activeTrip && (
+                  <>
+                    <span className="text-[10px] text-slate-400 font-bold block">{activeTrip.routeName}</span>
+                    <span className="text-[9px] text-slate-500 font-semibold block">لوحة رقم: {activeTrip.plateNumber}</span>
+                  </>
+                )}
               </div>
             </div>
 
@@ -435,15 +439,16 @@ export const DriverDashboard: React.FC = () => {
 
               {/* Dynamic QR Code Container */}
               <div className="bg-white p-5 rounded-[32px] w-fit mx-auto shadow-2xl border border-slate-800/20 relative">
-                <QRCodeCanvas 
-                  value={JSON.stringify({ 
-                    tripId: activeTrip.id,
-                    busId: activeTrip.routeId,
-                    timestamp: Date.now()
-                  })}
-                  size={192}
-                  level="H"
-                />
+                {activeTrip && (
+                  <QRCodeCanvas 
+                    value={JSON.stringify({ 
+                      tripId: activeTrip.id,
+                      busId: activeTrip.routeId
+                    })}
+                    size={192}
+                    level="H"
+                  />
+                )}
                 
                 {/* Embedded Logo Badge in QR */}
                 <div className="absolute inset-0 m-auto w-10 h-10 bg-slate-950 rounded-xl border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-md">
@@ -454,7 +459,7 @@ export const DriverDashboard: React.FC = () => {
               {/* Ticket Price HUD */}
               <div className="bg-slate-950/80 rounded-2xl py-3 px-6 w-fit mx-auto border border-slate-800/60">
                 <span className="text-[10px] text-slate-500 block font-bold">تعرفة الركوب والعبور الموحدة</span>
-                <span className="text-lg font-black text-emerald-400">{(activeTrip.ticketPrice || 1000).toLocaleString()} ل.س</span>
+                <span className="text-lg font-black text-emerald-400">{(activeTrip?.ticketPrice || 1000).toLocaleString()} ل.س</span>
               </div>
 
               <div className="text-[10px] text-slate-500 font-semibold flex items-center justify-center gap-1.5">

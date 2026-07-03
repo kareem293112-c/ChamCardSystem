@@ -19,7 +19,8 @@ import {
   limit,
   orderBy
 } from 'firebase/firestore';
-import firebaseConfig from './firebase-applet-config.json' assert { type: 'json' };
+
+const firebaseConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'firebase-applet-config.json'), 'utf8'));
 
 const firebaseApp = initializeApp(firebaseConfig);
 const firestoreInstance = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);

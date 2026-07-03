@@ -63,6 +63,8 @@ export type View =
   | 'payment_success' 
   | 'validator'
   | 'admin_requests'
+  | 'admin_login'
+  | 'driver'
   | 'transactions_history';
 
 export interface RechargeRequest {
