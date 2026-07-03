@@ -866,7 +866,7 @@ async function startServer() {
         const html = await vite.transformIndexHtml('/admin.html', fs.readFileSync(path.join(process.cwd(), 'admin.html'), 'utf-8'));
         res.status(200).set({ 'Content-Type': 'text/html' }).end(html);
       } else {
-        res.sendFile(path.join(process.cwd(), 'dist/admin/index.html'));
+        res.sendFile(path.join(process.cwd(), 'dist/admin/admin.html'));
       }
     } catch (e) {
       next(e);
@@ -1674,6 +1674,7 @@ async function startServer() {
   } else {
     // Serve static compiled admin assets under secure auth
     app.use('/admin/assets', requireAdmin, express.static(path.join(process.cwd(), 'dist/admin/assets')));
+    app.use('/assets', express.static(path.join(process.cwd(), 'dist/admin/assets')));
 
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
