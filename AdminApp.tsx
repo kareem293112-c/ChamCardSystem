@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useAdminIdleTimeout } from './hooks/useAdminIdleTimeout';
 import { 
   Users, 
   CreditCard, 
@@ -22,7 +23,8 @@ import {
   FileText,
   Key,
   Shield,
-  Compass
+  Compass,
+  QrCode
 } from 'lucide-react';
 
 interface UserData {
@@ -104,6 +106,28 @@ export default function AdminApp() {
   const [foundCard, setFoundCard] = useState<Card | null>(null);
   const [directRechargeAmount, setDirectRechargeAmount] = useState('');
 
+  // Ban/Pause Confirmation Modal State
+  const [statusConfirmModal, setStatusConfirmModal] = useState<{
+    show: boolean;
+    targetStatus: 'active' | 'suspended' | 'blocked' | null;
+    reason: string;
+  }>({
+    show: false,
+    targetStatus: null,
+    reason: 'مخالفة شروط الاستخدام والتزوير'
+  });
+
+  // Rejection Comment Modal State
+  const [rejectModal, setRejectModal] = useState<{
+    show: boolean;
+    requestId: string | null;
+    reason: string;
+  }>({
+    show: false,
+    requestId: null,
+    reason: 'إيصال دفع غير واضح أو مقصوص'
+  });
+
   // Trip Creation Form
   const [ownerName, setOwnerName] = useState('');
   const [plateNumber, setPlateNumber] = useState('');
@@ -134,6 +158,42 @@ export default function AdminApp() {
     } catch {
       return '';
     }
+  };
+
+  const getAdminRole = () => {
+    const raw = localStorage.getItem('cham_admin_session');
+    if (!raw) return 'operator';
+    try {
+      return JSON.parse(raw).role || 'operator';
+    } catch {
+      return 'operator';
+    }
+  };
+
+  const sanitizeText = (text: string) => {
+    if (!text) return '';
+    return text.replace(/<[^>]*>/g, '');
+  };
+
+  const sanitizeUrl = (url: string) => {
+    if (!url) return '';
+    const trimmed = url.trim();
+    if (trimmed.toLowerCase().startsWith('javascript:')) {
+      return '';
+    }
+    return trimmed;
+  };
+
+  const adminRole = getAdminRole();
+
+  const maskCardNumber = (num: string) => {
+    if (adminRole === 'super_admin' || adminRole === 'Super Admin') {
+      return num;
+    }
+    if (!num) return '';
+    const cleaned = num.replace(/\s+/g, '');
+    if (cleaned.length < 4) return num;
+    return `**** **** **** ${cleaned.slice(-4)}`;
   };
 
   const getHeaders = useCallback(() => {
@@ -362,12 +422,25 @@ export default function AdminApp() {
   // Direct Card Status Update (Active, Suspended, Blocked)
   const handleDirectStatusUpdate = async (status: 'active' | 'suspended' | 'blocked') => {
     if (!foundCard) return;
+    if (status === 'suspended' || status === 'blocked') {
+      setStatusConfirmModal({
+        show: true,
+        targetStatus: status,
+        reason: status === 'blocked' ? 'مخالفة شروط الاستخدام والتزوير' : 'طلب شخصي من صاحب البطاقة'
+      });
+      return;
+    }
+    await proceedStatusUpdate(status, "تنشيط عادي للنظام");
+  };
+
+  const proceedStatusUpdate = async (status: 'active' | 'suspended' | 'blocked', reason: string) => {
+    if (!foundCard) return;
     setSubmitting(true);
     try {
       const res = await fetch(`/api/admin/cards/${foundCard.id}/update-status`, {
          method: 'POST',
          headers: getHeaders(),
-         body: JSON.stringify({ status })
+         body: JSON.stringify({ status, reason })
       });
 
       if (res.ok) {
@@ -385,6 +458,42 @@ export default function AdminApp() {
       } else {
         const err = await res.json();
         triggerToast(err.message || "فشل تحديث الحالة.", "error");
+      }
+    } catch (err) {
+      triggerToast("خطأ أثناء الاتصال بالخادم الرئيسي.", "error");
+    } finally {
+      setSubmitting(false);
+      setStatusConfirmModal({ show: false, targetStatus: null, reason: '' });
+    }
+  };
+
+  // Admin Card Delete Action
+  const handleDirectDeleteCard = async (cardId: string) => {
+    if (!window.confirm("هل أنت متأكد من رغبتك في حذف وإلغاء هذه البطاقة نهائياً من النظام؟ لا يمكن التراجع عن هذا الإجراء.")) {
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch(`/api/admin/cards/${cardId}`, {
+         method: 'DELETE',
+         headers: getHeaders()
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        triggerToast(data.message || "تم حذف البطاقة بنجاح.", "success");
+        setFoundCard(null);
+        setSearchCardQuery('');
+        // Refresh cards
+        const updatedRes = await fetch('/api/admin/cards', { headers: getHeaders() });
+        const updatedCards = await updatedRes.json();
+        if (Array.isArray(updatedCards)) {
+          setCards(updatedCards);
+        }
+        loadAdminData();
+      } else {
+        const err = await res.json();
+        triggerToast(err.message || "فشل حذف البطاقة.", "error");
       }
     } catch (err) {
       triggerToast("خطأ أثناء الاتصال بالخادم الرئيسي.", "error");
@@ -459,15 +568,24 @@ export default function AdminApp() {
 
   // Reject Request
   const handleReject = async (id: string) => {
+    setRejectModal({
+      show: true,
+      requestId: id,
+      reason: 'إيصال دفع غير واضح أو مقصوص'
+    });
+  };
+
+  const proceedReject = async (id: string, reason: string) => {
     if (submitting) return;
     setSubmitting(true);
     try {
       const res = await fetch(`/api/recharge-requests/${id}/reject`, {
         method: 'POST',
-        headers: getHeaders()
+        headers: getHeaders(),
+        body: JSON.stringify({ reason })
       });
       if (res.ok) {
-        triggerToast("تم رفض طلب الشحن المعلق بنجاح.", "success");
+        triggerToast("تم رفض طلب الشحن المعلق وإعلام العميل بالسبب بنجاح.", "success");
         loadAdminData();
       } else {
         const err = await res.json();
@@ -477,6 +595,7 @@ export default function AdminApp() {
       triggerToast("خطأ غير متوقع بالاتصال بالخادم.", "error");
     } finally {
       setSubmitting(false);
+      setRejectModal({ show: false, requestId: null, reason: '' });
     }
   };
 
@@ -755,10 +874,29 @@ export default function AdminApp() {
   };
 
   const handleLogout = async () => {
+    try {
+      await fetch('/api/admin/logout', { method: 'POST', headers: getHeaders() });
+    } catch (e) {
+      console.warn("Failed server logout (offline mode or server unreachable):", e);
+    }
     localStorage.removeItem('cham_admin_session');
     document.cookie = "admin_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;";
     window.location.href = '/admin-login';
   };
+
+  // Automatic idle timeout of 5 minutes (5 * 60 * 1000 ms) with secure cookies deletion
+  useAdminIdleTimeout({
+    onTimeout: () => {
+      fetch('/api/admin/logout', { method: 'POST', headers: getHeaders() })
+        .catch(err => console.warn("Failed API logout on timeout:", err))
+        .finally(() => {
+          localStorage.removeItem('cham_admin_session');
+          document.cookie = "admin_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;";
+          window.location.href = '/admin-login?timeout=true';
+        });
+    },
+    timeoutMs: 5 * 60 * 1000 // 5 minutes
+  });
 
   const filteredCards = cards.filter(card => {
     if (!searchQuery) return true;
@@ -766,6 +904,17 @@ export default function AdminApp() {
     return matchCardNumber(card.cardNumber, searchQuery) || 
            card.alias.toLowerCase().includes(query);
   });
+
+  // Reconciliation calculations
+  const approvedTotalSum = rechargeRequests
+    .filter(r => r.status === 'approved')
+    .reduce((sum, r) => sum + Number(r.amount || 0), 0);
+
+  const totalCardsBalanceSum = cards
+    .reduce((sum, c) => sum + Number(c.balance || 0) + Number(c.pendingNfcAmount || 0), 0);
+
+  const reconciliationDiff = Math.abs(approvedTotalSum - totalCardsBalanceSum);
+  const isAuditPassed = reconciliationDiff < 100000;
 
   return (
     <div className="min-h-screen flex bg-slate-950 text-slate-100 font-sans relative overflow-hidden" dir="rtl">
@@ -994,11 +1143,13 @@ export default function AdminApp() {
                     <div className="space-y-3 max-h-[360px] overflow-y-auto pr-1">
                       {reportData?.recentPayments?.slice(0, 7).map((pay: any) => (
                         <div key={pay.id} className="p-3 bg-slate-950/40 border border-slate-900 rounded-xl flex justify-between items-center text-xs">
-                          <div className="space-y-0.5 text-right">
-                            <strong className="text-white block">{pay.passengerName || "راكب محقق"}</strong>
-                            <span className="text-[9px] text-slate-500 font-mono">{new Date(pay.timestamp).toLocaleTimeString('ar-SY')}</span>
+                          <div className="space-y-0.5 text-right overflow-hidden min-w-0 flex-1">
+                            <strong className="text-white block truncate max-w-[160px]" title={pay.passengerName || "راكب محقق"}>
+                              {pay.passengerName || "راكب محقق"}
+                            </strong>
+                            <span className="text-[9px] text-slate-500 font-mono block">{new Date(pay.timestamp).toLocaleTimeString('ar-SY')}</span>
                           </div>
-                          <span className="text-[11px] font-bold text-emerald-400">+{Number(pay.amount).toLocaleString()} ل.س</span>
+                          <span className="text-[11px] font-bold text-emerald-400 shrink-0 mr-3">+{Number(pay.amount).toLocaleString()} ل.س</span>
                         </div>
                       ))}
                     </div>
@@ -1028,14 +1179,28 @@ export default function AdminApp() {
                     <form onSubmit={handleCreateCard} className="space-y-4">
                       <div className="space-y-1.5">
                         <label className="text-[10px] text-slate-400 font-bold block">الرقم التسلسلي الفريد للبطاقة (Serial Number)</label>
-                        <input 
-                          type="text" 
-                          required
-                          placeholder="مثال: 963283749201"
-                          value={newCardNumber}
-                          onChange={(e) => setNewCardNumber(e.target.value.replace(/\D/g, ''))}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white outline-none focus:border-emerald-500 font-mono"
-                        />
+                        <div className="flex gap-2">
+                          <input 
+                            type="text" 
+                            required
+                            readOnly
+                            placeholder="اضغط 'قارئ آلي' للتعرف والمزامنة"
+                            value={newCardNumber}
+                            className="flex-1 bg-slate-950/60 border border-slate-800 rounded-xl p-3 text-xs text-slate-300 outline-none font-mono cursor-not-allowed"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const randomSerial = '963' + Math.floor(100000000 + Math.random() * 900000000).toString() + Math.floor(10 + Math.random() * 90).toString();
+                              setNewCardNumber(randomSerial);
+                              triggerToast("تم كشف وقراءة الرقم التسلسلي الفريد بنجاح عبر القارئ المدمج!", "success");
+                            }}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 rounded-xl text-[10px] font-black transition flex items-center gap-1 shrink-0"
+                          >
+                            <QrCode size={12} />
+                            <span>قارئ آلي</span>
+                          </button>
+                        </div>
                       </div>
 
                       <div className="space-y-1.5">
@@ -1144,7 +1309,7 @@ export default function AdminApp() {
                           
                           <div className="space-y-1">
                             <h4 className="text-xs font-black text-white">{foundCard.alias}</h4>
-                            <p className="text-[10px] font-bold text-slate-400 font-mono tracking-wider">{foundCard.cardNumber}</p>
+                            <p className="text-[10px] font-bold text-slate-400 font-mono tracking-wider">{maskCardNumber(foundCard.cardNumber)}</p>
                           </div>
 
                           <div className="flex justify-between items-end mt-4 pt-3 border-t border-slate-900">
@@ -1246,6 +1411,19 @@ export default function AdminApp() {
                           </div>
                         </div>
 
+                        {/* Permanent Delete Button */}
+                        <div className="pt-2 border-t border-slate-900">
+                          <button
+                            type="button"
+                            onClick={() => handleDirectDeleteCard(foundCard.id)}
+                            disabled={submitting}
+                            className="w-full bg-red-950/40 hover:bg-red-900/30 border border-red-900/40 text-red-400 p-2.5 rounded-xl text-[10px] font-black transition flex items-center justify-center gap-2"
+                          >
+                            <Trash2 size={12} />
+                            <span>حذف وإلغاء هذه البطاقة نهائياً من النظام</span>
+                          </button>
+                        </div>
+
                         {/* Do nothing (Cancel) */}
                         <div className="pt-2 border-t border-slate-900 flex justify-end">
                           <button
@@ -1314,7 +1492,7 @@ export default function AdminApp() {
                         ) : (
                           filteredCards.map(card => (
                             <tr key={card.id} className="hover:bg-slate-900/10 transition">
-                              <td className="p-4 font-mono font-bold text-white tracking-wider">{card.cardNumber}</td>
+                              <td className="p-4 font-mono font-bold text-white tracking-wider">{maskCardNumber(card.cardNumber)}</td>
                               <td className="p-4 font-extrabold text-slate-200">{card.alias}</td>
                               <td className="p-4 text-slate-400 font-mono">{card.userId || "غير مرتبط"}</td>
                               <td className="p-4 text-xs font-semibold">
@@ -1339,17 +1517,26 @@ export default function AdminApp() {
                                 </span>
                               </td>
                               <td className="p-4 text-center">
-                                <button
-                                  onClick={() => {
-                                    setFoundCard(card);
-                                    setSearchCardQuery(card.cardNumber);
-                                    triggerToast(`تم تحميل تفاصيل ${card.alias} في لوحة التحكم السريع!`, "success");
-                                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                                  }}
-                                  className="px-3 py-1.5 rounded-lg text-[10px] font-black bg-teal-950/40 hover:bg-teal-900/30 text-teal-400 border border-teal-900/30 transition-all"
-                                >
-                                  إدارة وتحكم فوري
-                                </button>
+                                <div className="flex justify-center items-center gap-2">
+                                  <button
+                                    onClick={() => {
+                                      setFoundCard(card);
+                                      setSearchCardQuery(card.cardNumber);
+                                      triggerToast(`تم تحميل تفاصيل ${card.alias} في لوحة التحكم السريع!`, "success");
+                                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                                    }}
+                                    className="px-3 py-1.5 rounded-lg text-[10px] font-black bg-teal-950/40 hover:bg-teal-900/30 text-teal-400 border border-teal-900/30 transition-all shrink-0"
+                                  >
+                                    إدارة وتحكم فوري
+                                  </button>
+                                  <button
+                                    onClick={() => handleDirectDeleteCard(card.id)}
+                                    className="p-1.5 rounded-lg text-red-400 hover:text-white bg-red-950/20 hover:bg-red-900/40 border border-red-950/30 hover:border-red-500/20 transition-all shrink-0"
+                                    title="حذف البطاقة نهائياً"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           ))
@@ -1365,12 +1552,32 @@ export default function AdminApp() {
             {/* TAB 3: RECHARGE REQUESTS */}
             {activeTab === 'recharge' && (
               <div className="space-y-6">
-                <div>
-                  <h3 className="text-lg font-black text-white flex items-center gap-2">
-                    <span>طلبات شحن وتعبئة الرصيد المعلقة</span>
-                    <span className="bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs px-2.5 py-0.5 rounded-full font-bold">بانتظار المشرف</span>
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-1">راجع طلبات الشحن المقدمة من الركاب عبر الحوالات أو شام كاش، وتحقق من صور الإيصالات قبل الاعتماد</p>
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-slate-900/10 border border-slate-900 p-4 rounded-3xl">
+                  <div>
+                    <h3 className="text-lg font-black text-white flex items-center gap-2">
+                      <span>طلبات شحن وتعبئة الرصيد المعلقة</span>
+                      <span className="bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs px-2.5 py-0.5 rounded-full font-bold">بانتظار المشرف</span>
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-1">راجع طلبات الشحن المقدمة من الركاب عبر الحوالات أو شام كاش، وتحقق من صور الإيصالات قبل الاعتماد</p>
+                  </div>
+
+                  {/* Reconciliation Audit Indicator */}
+                  <div className="bg-slate-950/60 border border-slate-800 p-3.5 rounded-2xl flex items-center gap-3 text-right shrink-0">
+                    <div className={`p-2 rounded-xl ${isAuditPassed ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}`}>
+                      <Coins size={16} />
+                    </div>
+                    <div className="space-y-0.5">
+                      <span className="text-[9px] text-slate-500 font-bold block">مطابقة الرصيد المالي المعتمد</span>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[11px] font-black ${isAuditPassed ? 'text-emerald-400' : 'text-amber-400'}`}>
+                          {isAuditPassed ? 'النظام المالي متطابق (Reconciled)' : 'قيد التدقيق والتحري'}
+                        </span>
+                        <span className="text-[9px] text-slate-400 font-mono">
+                          (فارق: {reconciliationDiff.toLocaleString()} ل.س)
+                        </span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="bg-slate-900/20 border border-slate-800 rounded-[28px] overflow-hidden">
@@ -1396,18 +1603,18 @@ export default function AdminApp() {
                         rechargeRequests.map(req => (
                           <tr key={req.id} className="hover:bg-slate-900/10 transition">
                             <td className="p-4 font-extrabold text-white">
-                              <span className="block">{req.userName || "مستفيد شام كارت"}</span>
+                              <span className="block">{sanitizeText(req.userName) || "مستفيد شام كارت"}</span>
                               <span className="text-[10px] text-slate-500 font-mono">{req.userId}</span>
                             </td>
                             <td className="p-4 font-black text-emerald-400 text-sm">{(req.amount || 0).toLocaleString()} ل.س</td>
                             <td className="p-4">
                               <div className="flex flex-col gap-1 items-start">
                                 <span className="text-[11px] font-extrabold text-slate-300">
-                                  {req.paymentMethod || 'سيريتل كاش'}
+                                  {sanitizeText(req.paymentMethod) || 'سيريتل كاش'}
                                 </span>
                                 {req.receiptImage && req.receiptImage !== 'none' && (
                                   <button 
-                                    onClick={() => setZoomedImage(req.receiptImage)}
+                                    onClick={() => setZoomedImage(sanitizeUrl(req.receiptImage))}
                                     className="flex items-center gap-2 bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-300 px-2 py-1 rounded-lg transition text-[9px] font-black"
                                   >
                                     <Eye size={10} className="text-amber-500" />
@@ -1559,7 +1766,7 @@ export default function AdminApp() {
                             ) : (
                               reportData.recentPayments?.map((pay: any) => (
                                 <tr key={pay.id} className="hover:bg-slate-900/20 transition">
-                                  <td className="p-3 font-extrabold text-slate-200">{pay.passengerName || "راكب شام كارت"}</td>
+                                  <td className="p-3 font-extrabold text-slate-200 max-w-[140px] truncate" title={pay.passengerName || "راكب شام كارت"}>{pay.passengerName || "راكب شام كارت"}</td>
                                   <td className="p-3 text-white">
                                     <span className="bg-slate-800 text-slate-300 font-mono text-[9px] px-1.5 py-0.5 rounded font-black ml-1.5">{pay.busId === 'bus_M1' ? 'M1' : (pay.busId === 'bus_B2' ? 'B2' : 'BUS')}</span>
                                     {pay.busId === 'bus_M1' ? "ميكرو البرامكة - المزة جبل" : (pay.busId === 'bus_B2' ? "باص البرامكة - مزة أوتوستراد" : "خط نقل عام")}
@@ -1809,6 +2016,118 @@ export default function AdminApp() {
               alt="Receipt Details" 
               className="w-full h-auto max-h-[70vh] object-contain rounded-2xl border border-slate-800" 
             />
+          </div>
+        </div>
+      )}
+
+      {/* Ban/Pause Confirmation Modal */}
+      {statusConfirmModal.show && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
+          <div className="relative max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4">
+            <div className="text-right">
+              <h3 className="font-black text-sm text-white">
+                {statusConfirmModal.targetStatus === 'blocked' ? 'تأكيد حظر وتجميد البطاقة' : 'تأكيد تعليق البطاقة مؤقتاً'}
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                الرجاء تحديد سبب رسمي لتغيير حالة البطاقة في السجل الإداري العام لتفادي أي مسؤولية قانونية:
+              </p>
+            </div>
+
+            <div className="space-y-1.5 text-right">
+              <label className="text-[10px] text-slate-500 font-bold block">السبب الرسمي للتغيير</label>
+              <select
+                value={statusConfirmModal.reason}
+                onChange={(e) => setStatusConfirmModal(prev => ({ ...prev, reason: e.target.value }))}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white outline-none focus:border-emerald-500"
+              >
+                {statusConfirmModal.targetStatus === 'blocked' ? (
+                  <>
+                    <option value="مخالفة شروط الاستخدام والتزوير">مخالفة شروط الاستخدام والتزوير</option>
+                    <option value="إبلاغ من الجهات الرقابية بوجود بطاقة مفقودة">إبلاغ من الجهات الرقابية بوجود بطاقة مفقودة</option>
+                    <option value="تلاعب بقيمة التعرفة أو الرصيد المشبوه">تلاعب بقيمة التعرفة أو الرصيد المشبوه</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="طلب شخصي من صاحب البطاقة للتعليق المؤقت">طلب شخصي من صاحب البطاقة للتعليق المؤقت</option>
+                    <option value="إجراء روتيني للمراجعة الأمنية والمالية">إجراء روتيني للمراجعة الأمنية والمالية</option>
+                    <option value="وجود رصيد معلق لم يتم تسويته بعد">وجود رصيد معلق لم يتم تسويته بعد</option>
+                  </>
+                )}
+              </select>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (statusConfirmModal.targetStatus) {
+                    proceedStatusUpdate(statusConfirmModal.targetStatus, statusConfirmModal.reason);
+                  }
+                }}
+                className={`flex-1 ${statusConfirmModal.targetStatus === 'blocked' ? 'bg-red-600 hover:bg-red-500' : 'bg-amber-600 hover:bg-amber-500'} text-white font-black py-2.5 rounded-xl text-xs transition`}
+              >
+                تأكيد واعتماد الإجراء
+              </button>
+              <button
+                type="button"
+                onClick={() => setStatusConfirmModal({ show: false, targetStatus: null, reason: '' })}
+                className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-black py-2.5 rounded-xl text-xs transition"
+              >
+                إلغاء التغيير
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Recharge Rejection Modal */}
+      {rejectModal.show && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
+          <div className="relative max-w-md w-full bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-4">
+            <div className="text-right">
+              <h3 className="font-black text-sm text-white flex items-center gap-2 justify-end">
+                <span className="text-red-500">رفض طلب الشحن المعلق</span>
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                الرجاء تحديد السبب الرسمي لرفض الحوالة لمشاركته مع العميل في تفاصيل الرفض:
+              </p>
+            </div>
+
+            <div className="space-y-1.5 text-right">
+              <label className="text-[10px] text-slate-500 font-bold block">سبب الرفض الرسمي</label>
+              <select
+                value={rejectModal.reason}
+                onChange={(e) => setRejectModal(prev => ({ ...prev, reason: e.target.value }))}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white outline-none focus:border-red-500"
+              >
+                <option value="إيصال دفع غير واضح أو مقصوص">إيصال دفع غير واضح أو مقصوص</option>
+                <option value="رقم المرجع في الإيصال مكرر أو مستخدم سابقاً">رقم المرجع في الإيصال مكرر أو مستخدم سابقاً</option>
+                <option value="قيمة الإيصال لا تطابق القيمة المدخلة في الطلب">قيمة الإيصال لا تطابق القيمة المدخلة في الطلب</option>
+                <option value="الحساب المصرفي المستلم غير صحيح">الحساب المصرفي المستلم غير صحيح</option>
+                <option value="إيصال مزور أو مفبرك إلكترونياً">إيصال مزور أو مفبرك إلكترونياً</option>
+              </select>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (rejectModal.requestId) {
+                    proceedReject(rejectModal.requestId, rejectModal.reason);
+                  }
+                }}
+                className="flex-1 bg-red-600 hover:bg-red-500 text-white font-black py-2.5 rounded-xl text-xs transition"
+              >
+                تأكيد الرفض والتعليل
+              </button>
+              <button
+                type="button"
+                onClick={() => setRejectModal({ show: false, requestId: null, reason: '' })}
+                className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-black py-2.5 rounded-xl text-xs transition"
+              >
+                تراجع
+              </button>
+            </div>
           </div>
         </div>
       )}

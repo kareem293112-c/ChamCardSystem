@@ -38,6 +38,17 @@ export const DriverDashboard: React.FC = () => {
   const [passengerTokenInput, setPassengerTokenInput] = useState<string>('');
   const [scanResultToast, setScanResultToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
+  // Dynamic QR High-entropy nonce
+  const [qrNonce, setQrNonce] = useState<number>(Date.now());
+
+  useEffect(() => {
+    if (!isLoggedIn || !activeTrip) return;
+    const interval = setInterval(() => {
+      setQrNonce(Date.now());
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [isLoggedIn, activeTrip]);
+
   // Bus Offline Queue State
   const [offlineQueue, setOfflineQueue] = useState<any[]>(() => {
     const saved = localStorage.getItem('pending_offline_trips');
@@ -166,10 +177,19 @@ export const DriverDashboard: React.FC = () => {
     return () => clearInterval(interval);
   }, [isLoggedIn, activeTrip, isLiveActive]);
 
-  // Audio feedback synthesizers (Web Audio API)
+  // Audio Context Ref (Pre-init)
+  const audioCtxRef = useRef<AudioContext | null>(null);
+
+  const initAudio = () => {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+  };
+
   const playSuccessBeep = () => {
+    initAudio();
     try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const audioCtx = audioCtxRef.current!;
       const osc = audioCtx.createOscillator();
       const gainNode = audioCtx.createGain();
 
@@ -189,8 +209,9 @@ export const DriverDashboard: React.FC = () => {
   };
 
   const playFailureBuzzer = () => {
+    initAudio();
     try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const audioCtx = audioCtxRef.current!;
       
       const playBuzz = (delay: number) => {
         const osc = audioCtx.createOscillator();
@@ -210,6 +231,28 @@ export const DriverDashboard: React.FC = () => {
     } catch (e) {
       console.warn("AudioContext failure buzzer error", e);
     }
+  };
+
+  const getLocationWithTimeout = (): Promise<{ lat: number, lng: number } | null> => {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        resolve(null);
+        return;
+      }
+      const timeout = setTimeout(() => {
+        resolve(null);
+      }, 2000);
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          clearTimeout(timeout);
+          resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        },
+        () => {
+          clearTimeout(timeout);
+          resolve(null);
+        }
+      );
+    });
   };
 
   // Trigger feedback overlay
@@ -243,6 +286,9 @@ export const DriverDashboard: React.FC = () => {
     setAuthError(null);
     setAuthLoading(true);
 
+    // Initialize Audio on gesture
+    initAudio();
+
     try {
       const res = await fetch('/api/driver/login', {
         method: 'POST',
@@ -267,6 +313,25 @@ export const DriverDashboard: React.FC = () => {
   // Handle Trip Logout (Frees QR and deactivates trip)
   const handleLogout = async () => {
     if (!activeTrip) return;
+
+    // Explicit trip deactivation triggers automatic flush/clear of local offline queues
+    if (offlineQueue.length > 0) {
+      if (navigator.onLine) {
+        try {
+          await syncOfflineQueue();
+        } catch (err) {
+          console.warn("Could not flush offline queue before logout deactivation", err);
+          setScanResultToast({ message: "فشل مزامنة تذاكر العبور. لا يمكن إنهاء الرحلة حالياً. يرجى الاتصال بالإنترنت.", type: 'error' });
+          return;
+        }
+      } else {
+        setScanResultToast({ message: "لا يوجد اتصال بالإنترنت لمزامنة تذاكر العبور. لا يمكن إنهاء الرحلة حالياً.", type: 'error' });
+        return;
+      }
+      setOfflineQueue([]);
+      localStorage.removeItem('pending_offline_trips');
+    }
+
     try {
       await fetch('/api/driver/logout', {
         method: 'POST',
@@ -330,6 +395,11 @@ export const DriverDashboard: React.FC = () => {
 
     const isOffline = !navigator.onLine;
 
+    // Async GPS fetch with timeout
+    const location = await getLocationWithTimeout();
+    const gpsLog = location || { lat: 33.5110, lng: 36.2750 }; // Default
+    const location_status = location ? "active" : "compromised_offline";
+
     if (isOffline) {
       try {
         const decoded = atob(token.trim());
@@ -356,7 +426,9 @@ export const DriverDashboard: React.FC = () => {
           timestamp,
           signature,
           amount: ticketPrice,
-          isOffline: true
+          isOffline: true,
+          gpsLog,
+          location_status
         };
 
         setOfflineQueue(prev => [...prev, localPayment]);
@@ -390,7 +462,9 @@ export const DriverDashboard: React.FC = () => {
         body: JSON.stringify({
           qrToken: token.trim(),
           busId: activeTrip.routeId,
-          tripId: activeTrip.id
+          tripId: activeTrip.id,
+          gpsLog,
+          location_status
         })
       });
       const data = await res.json();
@@ -620,7 +694,8 @@ export const DriverDashboard: React.FC = () => {
                       tripId: activeTrip.id,
                       tripCode: activeTrip.tripCode || activeTrip.id,
                       busId: activeTrip.busId || activeTrip.routeId,
-                      ticketPrice: activeTrip.ticketPrice || 1000
+                      ticketPrice: activeTrip.ticketPrice || 1000,
+                      nonce: qrNonce
                     })}
                     size={192}
                     level="H"

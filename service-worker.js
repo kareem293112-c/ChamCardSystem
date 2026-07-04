@@ -1,12 +1,9 @@
 // ChamCard PRO - High-Fidelity Offline-First Service Worker
-const CACHE_NAME = 'chamcard-pro-v1';
+const CACHE_NAME = 'chamcard-pro-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
-  '/index.css',
-  '/index.tsx',
-  '/App.tsx',
-  '/AdminApp.tsx'
+  '/index.css'
 ];
 
 // Open and retrieve a value from IndexedDB inside Service Worker
@@ -140,7 +137,6 @@ self.addEventListener('fetch', (e) => {
     url.pathname.endsWith('.html') ||
     url.pathname.endsWith('.css') ||
     url.pathname.endsWith('.js') ||
-    url.pathname.endsWith('.tsx') ||
     url.pathname.endsWith('.png') ||
     url.pathname.endsWith('.jpg') ||
     url.pathname.includes('/assets/') ||

@@ -157,6 +157,14 @@
         loadingSpinner.classList.add('hidden');
       }
     });
+
+    // Check for inactivity timeout flag on page load
+    window.addEventListener('DOMContentLoaded', () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('timeout') === 'true') {
+        showToast('تم تسجيل الخروج تلقائياً بسبب عدم النشاط لمدة 5 دقائق لحماية لوحة التحكم والبيانات.', 'error');
+      }
+    });
   </script>
 </body>
 </html>

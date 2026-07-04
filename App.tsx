@@ -12,7 +12,7 @@ import { Html5Qrcode } from 'html5-qrcode';
 import { View, Card, AuthSession, AppAction, SystemState, RechargeRequest, Transaction } from './types';
 import { authStore } from './store/authStore';
 import { rechargeService } from './services/rechargeService';
-import { offlineDb } from './services/offlineDb';
+import { useAdminIdleTimeout } from './hooks/useAdminIdleTimeout';
 
 import BalanceCard from './components/BalanceCard';
 import QuickActions from './components/QuickActions';
@@ -27,8 +27,9 @@ import SecurityCenter from './components/SecurityCenter';
 import AddCardModal from './components/AddCardModal';
 import TransactionsHistory from './components/TransactionsHistory';
 import { NfcSyncModal } from './components/NfcSyncModal';
-import { DriverDashboard } from './components/DriverDashboard';
-import AdminApp from './AdminApp';
+
+const DriverDashboard = React.lazy(() => import('./components/DriverDashboard').then(m => ({ default: m.DriverDashboard })));
+const AdminApp = React.lazy(() => import('./AdminApp'));
 
 // الصورة الأصلية التي قدمها المستخدم (الباركود مع الشعار مدمجين)
 const ORIGINAL_QR_IMAGE = "https://images2.imgbox.com/6c/f5/lYn1Qe4c_o.png";
@@ -108,6 +109,32 @@ const App: React.FC = () => {
     localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
   }, [isDarkMode]);
 
+  // Passenger/user session automatic idle timeout of 5 minutes
+  useAdminIdleTimeout({
+    onTimeout: () => {
+      if (session) {
+        authStore.clearSession();
+        setSession(null);
+        setActiveView('home');
+        triggerToast('تم تسجيل الخروج تلقائياً لعدم النشاط لحماية حسابك', 'error');
+      }
+    },
+    timeoutMs: 5 * 60 * 1000 // 5 minutes
+  });
+
+  // Request persistent storage
+  useEffect(() => {
+    if (navigator.storage && navigator.storage.persist) {
+      navigator.storage.persist().then(persistent => {
+        if (persistent) {
+          console.log("Storage will not be cleared by the UA.");
+        } else {
+          console.log("Storage may be cleared by the UA under pressure.");
+        }
+      });
+    }
+  }, []);
+
   const [showInspector, setShowInspector] = useState(false);
   const [showAddCard, setShowAddCard] = useState(false);
 
@@ -152,143 +179,9 @@ const App: React.FC = () => {
     setActiveView('transport');
   }, []);
 
-  const [transactions, setTransactions] = useState<Transaction[]>(() => {
-    const saved = localStorage.getItem('user_transactions');
-    return saved ? JSON.parse(saved) : [
-      {
-        id: 't1',
-        cardId: '1',
-        cardName: 'بطاقتي الشخصية',
-        type: 'recharge',
-        title: 'شحن رصيد - شام كاش',
-        subtitle: 'طلب شحن إثبات دفع مقبول',
-        amount: 25000,
-        timestamp: Date.now() - 3600000 * 2
-      },
-      {
-        id: 't2',
-        cardId: '1',
-        cardName: 'بطاقتي الشخصية',
-        type: 'pay',
-        title: 'باص البرامكة - خط 2',
-        subtitle: 'تسجيل دخول الحافلة (QR)',
-        amount: -1000,
-        timestamp: Date.now() - 3600000 * 24
-      },
-      {
-        id: 't3',
-        cardId: '1',
-        cardName: 'بطاقتي الشخصية',
-        type: 'pay',
-        title: 'باص كراجات السيدة زينب',
-        subtitle: 'خط الكراجات الجنوبي',
-        amount: -1500,
-        timestamp: Date.now() - 3600000 * 24 * 3
-      },
-      {
-        id: 't4',
-        cardId: '1',
-        cardName: 'بطاقتي الشخصية',
-        type: 'transfer',
-        title: 'تحويل صادر إلى ريم',
-        subtitle: 'حوالة فورية رقمية',
-        amount: -10000,
-        timestamp: Date.now() - 3600000 * 24 * 7
-      },
-      {
-        id: 't5',
-        cardId: '1',
-        cardName: 'بطاقتي الشخصية',
-        type: 'recharge',
-        title: 'شحن رصيد من وكيل سيرتيل',
-        subtitle: 'تعبئة فورية مركزية',
-        amount: 50000,
-        timestamp: Date.now() - 3600000 * 24 * 10
-      },
-      {
-        id: 't6',
-        cardId: '1',
-        cardName: 'بطاقتي الشخصية',
-        type: 'pay',
-        title: 'ميكرو سرفيس المزة جبل',
-        subtitle: 'دفع أجرة مقعدين',
-        amount: -1000,
-        timestamp: Date.now() - 3600000 * 24 * 15
-      },
-      {
-        id: 't7',
-        cardId: '1',
-        cardName: 'بطاقتي الشخصية',
-        type: 'pay',
-        title: 'مكتبة باب توما الجامعية',
-        subtitle: 'شراء ملخصات وكتب الطبعة',
-        amount: -6000,
-        timestamp: Date.now() - 3600000 * 24 * 32
-      },
-      {
-        id: 't8',
-        cardId: '1',
-        cardName: 'بطاقتي الشخصية',
-        type: 'transfer',
-        title: 'تحويل وارد من أحمد سليمان',
-        subtitle: 'رقم مرجعي TX9213',
-        amount: 15000,
-        timestamp: Date.now() - 3600000 * 24 * 50
-      },
-      {
-        id: 't9',
-        cardId: '1',
-        cardName: 'بطاقتي الشخصية',
-        type: 'pay',
-        title: 'قطار المشاة - المزة/الربوة',
-        subtitle: 'تذكرة رحلة ذهاب وإياب سياحية',
-        amount: -3000,
-        timestamp: Date.now() - 3600000 * 24 * 72
-      },
-      {
-        id: 't10',
-        cardId: '1',
-        cardName: 'بطاقتي الشخصية',
-        type: 'recharge',
-        title: 'رصيد إفتتاح المحفظة أول مرة',
-        subtitle: 'شحن إيداع نقدي رسمي',
-        amount: 100000,
-        timestamp: Date.now() - 3600000 * 24 * 85
-      }
-    ];
-  });
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
 
-  useEffect(() => {
-    localStorage.setItem('user_transactions', JSON.stringify(transactions));
-  }, [transactions]);
-
-  const [cards, setCards] = useState<Card[]>(() => {
-    const saved = localStorage.getItem('user_cards');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed;
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
-    return [
-      { 
-        id: '1', 
-        alias: 'بطاقتي الشخصية', 
-        cardNumber: '9630 1122 3344 8822', 
-        balance: 45200, 
-        type: 'digital',
-        themeColor: 'emerald'
-      }
-    ];
-  });
-
-  useEffect(() => {
-    localStorage.setItem('user_cards', JSON.stringify(cards));
-  }, [cards]);
+  const [cards, setCards] = useState<Card[]>([]);
 
   const loadDashboard = useCallback(() => {
     if (!session?.token) return;
@@ -308,7 +201,7 @@ const App: React.FC = () => {
     })
     .then(data => {
       if (!data) return;
-      if (data.cards && data.cards.length > 0) {
+      if (data.cards) {
         setCards(data.cards);
       }
       if (data.transactions) {
@@ -317,8 +210,6 @@ const App: React.FC = () => {
       if (data.user) {
         setSession(prev => prev ? { ...prev, user: { ...prev.user, ...data.user } } : null);
       }
-      // Save carbon copy to IndexedDB
-      offlineDb.set('dashboard_data', data).catch(err => console.warn("Failed caching dashboard", err));
     })
     .catch(err => {
       console.error("Error fetching dashboard:", err);
@@ -336,8 +227,6 @@ const App: React.FC = () => {
       .then(data => {
         if (Array.isArray(data)) {
           setOffers(data);
-          // Save carbon copy to IndexedDB
-          offlineDb.set('offers_data', data).catch(err => console.warn("Failed caching offers", err));
         }
         setLoadingOffers(false);
       })
@@ -345,35 +234,6 @@ const App: React.FC = () => {
         console.error("Error loading offers:", err);
         setLoadingOffers(false);
       });
-  }, []);
-
-  // Hydrate states from IndexedDB offline storage at boot time
-  useEffect(() => {
-    offlineDb.init().then(() => {
-      offlineDb.get('dashboard_data').then(cached => {
-        if (cached) {
-          console.log("Hydrated dashboard from IndexedDB:", cached);
-          if (cached.cards && cached.cards.length > 0) {
-            setCards(cached.cards);
-          }
-          if (cached.transactions) {
-            setTransactions(cached.transactions);
-          }
-          if (cached.user && session) {
-            setSession(prev => prev ? { ...prev, user: { ...prev.user, ...cached.user } } : null);
-          }
-        }
-      }).catch(e => console.warn(e));
-
-      offlineDb.get('offers_data').then(cachedOffers => {
-        if (Array.isArray(cachedOffers)) {
-          console.log("Hydrated offers from IndexedDB:", cachedOffers);
-          setOffers(cachedOffers);
-        }
-      }).catch(e => console.warn(e));
-    }).catch(err => {
-      console.warn("Could not initialize IndexedDB on start", err);
-    });
   }, []);
 
   useEffect(() => {
@@ -552,9 +412,17 @@ const App: React.FC = () => {
   const renderView = () => {
     switch(activeView) {
       case 'admin_login':
-        return <AdminApp />;
+        return (
+          <React.Suspense fallback={<div className="flex items-center justify-center min-h-screen bg-slate-900 text-white font-bold text-center">جاري تحميل لوحة التحكم...</div>}>
+            <AdminApp />
+          </React.Suspense>
+        );
       case 'driver':
-        return <DriverDashboard />;
+        return (
+          <React.Suspense fallback={<div className="flex items-center justify-center min-h-screen bg-slate-950 text-emerald-400 font-bold text-center">جاري تحميل واجهة السائق...</div>}>
+            <DriverDashboard />
+          </React.Suspense>
+        );
       case 'topup':
         if (topupStep !== 'confirm') {
           return (
@@ -857,19 +725,12 @@ const App: React.FC = () => {
                     if (res.ok) {
                       setCards(prev => prev.filter(c => c.id !== id));
                       triggerToast('تم حذف البطاقة بنجاح', 'success');
-                      offlineDb.get('dashboard_data').then(cached => {
-                        if (cached && cached.cards) {
-                          cached.cards = cached.cards.filter((c: any) => c.id !== id);
-                          offlineDb.set('dashboard_data', cached).catch(() => {});
-                        }
-                      }).catch(() => {});
                     } else {
                       triggerToast('فشل حذف البطاقة من الخادم', 'error');
                     }
                   })
                   .catch(() => {
-                    setCards(prev => prev.filter(c => c.id !== id));
-                    triggerToast('تم الحفظ محلياً (وضع العمل دون اتصال)', 'success');
+                    triggerToast('حدث خطأ أثناء الاتصال بالخادم الرئيسي', 'error');
                   });
                 } else {
                   setCards(prev => prev.filter(c => c.id !== id));
@@ -890,19 +751,12 @@ const App: React.FC = () => {
                     if (res.ok) {
                       setCards(prev => prev.map(c => c.id === id ? { ...c, alias: newAlias } : c));
                       triggerToast('تم تعديل اسم البطاقة بنجاح', 'success');
-                      offlineDb.get('dashboard_data').then(cached => {
-                        if (cached && cached.cards) {
-                          cached.cards = cached.cards.map((c: any) => c.id === id ? { ...c, alias: newAlias } : c);
-                          offlineDb.set('dashboard_data', cached).catch(() => {});
-                        }
-                      }).catch(() => {});
                     } else {
                       triggerToast('فشل تعديل اسم البطاقة بالخادم', 'error');
                     }
                   })
                   .catch(() => {
-                    setCards(prev => prev.map(c => c.id === id ? { ...c, alias: newAlias } : c));
-                    triggerToast('تم التعديل محلياً (وضع العمل دون اتصال)', 'success');
+                    triggerToast('حدث خطأ أثناء الاتصال بالخادم الرئيسي', 'error');
                   });
                 } else {
                   setCards(prev => prev.map(c => c.id === id ? { ...c, alias: newAlias } : c));
@@ -2053,22 +1907,6 @@ const QrPaymentView: React.FC<{
         <div className="w-12"></div>
       </div>
 
-      {/* Mode Switch Tabs */}
-      <div className="flex bg-slate-100 dark:bg-slate-900 p-1 rounded-2xl mb-6">
-        <button 
-          onClick={() => setPayMode('scan')} 
-          className={`flex-1 py-3 text-xs font-black rounded-xl transition ${payMode === 'scan' ? 'bg-white dark:bg-slate-800 text-emerald-600 dark:text-white shadow-sm' : 'text-slate-400 dark:text-slate-500'}`}
-        >
-          مسح ملصق الحافلة (كاميرا)
-        </button>
-        <button 
-          onClick={() => setPayMode('generate')} 
-          className={`flex-1 py-3 text-xs font-black rounded-xl transition ${payMode === 'generate' ? 'bg-white dark:bg-slate-800 text-emerald-600 dark:text-white shadow-sm' : 'text-slate-400 dark:text-slate-500'}`}
-        >
-          عرض كود بطاقتي (القارئ)
-        </button>
-      </div>
-
       {/* Styled Source Account Selector */}
       <div className="bg-white dark:bg-slate-900 p-4 rounded-[28px] border border-slate-100 dark:border-slate-800 shadow-sm text-right mb-6">
         <p className="text-[10px] font-black text-slate-400 mb-2 uppercase">محفظة الدفع النشطة</p>
@@ -2132,22 +1970,6 @@ const QrPaymentView: React.FC<{
         </div>
       ) : (
         <>
-          {/* Dynamic Route/Bus Selector */}
-          <div className="bg-white dark:bg-slate-900 p-4 rounded-[28px] border border-slate-100 dark:border-slate-800 shadow-sm text-right mb-6">
-            <p className="text-[10px] font-black text-slate-400 mb-2 uppercase">محاكاة مسح ملصق الحافلة (الخط والتعرفة)</p>
-            <select 
-              value={selectedBusId} 
-              onChange={(e) => setSelectedBusId(e.target.value)}
-              className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl font-bold text-xs pr-4 dark:text-white outline-none cursor-pointer"
-            >
-              {buses.map(b => (
-                 <option key={b.id} value={b.id} className="dark:bg-slate-900">
-                   {b.route_name} - التعرفة: {b.ticket_price.toLocaleString()} ل.س
-                 </option>
-              ))}
-            </select>
-          </div>
-
           {/* 100% REALISTIC QR SCANNER VIEWFINDER */}
           <div 
             id="qr-viewfinder-container"

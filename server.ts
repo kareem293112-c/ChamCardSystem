@@ -29,7 +29,8 @@ import {
   query, 
   where, 
   limit,
-  orderBy
+  orderBy,
+  runTransaction
 } from 'firebase/firestore';
 
 const firebaseConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'firebase-applet-config.json'), 'utf8'));
@@ -114,6 +115,30 @@ class CollectionReferenceWrapper extends QueryWrapper {
 const db = {
   collection(path: string) {
     return new CollectionReferenceWrapper(path);
+  },
+  async runTransaction<T>(updateFunction: (transaction: any) => Promise<T>): Promise<T> {
+    return runTransaction(firestoreInstance, async (rawTransaction) => {
+      const tx = {
+        async get(docRefWrapper: DocumentReferenceWrapper) {
+          const snap = await rawTransaction.get(docRefWrapper.rawDoc);
+          return {
+            exists: snap.exists(),
+            id: snap.id,
+            data: () => snap.data() as any
+          };
+        },
+        update(docRefWrapper: DocumentReferenceWrapper, data: any) {
+          rawTransaction.update(docRefWrapper.rawDoc, data);
+        },
+        set(docRefWrapper: DocumentReferenceWrapper, data: any) {
+          rawTransaction.set(docRefWrapper.rawDoc, data);
+        },
+        delete(docRefWrapper: DocumentReferenceWrapper) {
+          rawTransaction.delete(docRefWrapper.rawDoc);
+        }
+      };
+      return updateFunction(tx);
+    });
   }
 };
 
@@ -394,6 +419,17 @@ async function startServer() {
     }
   });
 
+  // Secure Admin Logout API
+  app.post("/api/admin/logout", async (req, res) => {
+    try {
+      res.setHeader('Set-Cookie', 'admin_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+      res.json({ success: true, message: "تم تسجيل الخروج بنجاح وسحب ملفات التعريف." });
+    } catch (err) {
+      console.error("Admin Logout Error:", err);
+      res.status(500).json({ message: "فشل تسجيل الخروج من المخدم." });
+    }
+  });
+
   // Secure Recharge Requests APIs
   app.post("/api/recharge-requests", async (req, res) => {
     try {
@@ -440,60 +476,85 @@ async function startServer() {
     try {
       const requestId = req.params.id as string;
       const reqRef = db.collection('recharge_requests').doc(requestId);
-      const reqDoc = await reqRef.get();
-      if (!reqDoc.exists) {
-        return res.status(404).json({ message: "الطلب غير موجود" });
+
+      // Fetch user's cards outside the transaction function
+      const reqDocOutside = await reqRef.get();
+      if (!reqDocOutside.exists) {
+        return res.status(404).json({ message: "طلب الشحن غير موجود." });
       }
+      const requestDataOutside = reqDocOutside.data();
+      const userId = requestDataOutside?.userId;
 
-      const requestData = reqDoc.data();
-      if (requestData.status !== 'pending') {
-        return res.status(400).json({ message: "تمت معالجة هذا الطلب مسبقاً." });
-      }
-
-      await reqRef.update({ status: 'approved' });
-
-      // Update card balance
-      const userId = requestData.userId;
       const cardsSnap = await db.collection('cards').where('userId', '==', userId).get();
-      let primaryCard: any = null;
       let primaryCardId = "";
+      let primaryCardData: any = null;
 
       cardsSnap.forEach(doc => {
         const c = doc.data();
-        if (c.is_primary || !primaryCard) {
-          primaryCard = c;
+        if (c.is_primary || !primaryCardData) {
+          primaryCardData = c;
           primaryCardId = doc.id;
         }
       });
 
-      if (primaryCard) {
-        const amount = Number(requestData.amount);
-        if (primaryCard.type === 'physical') {
-          const pending = Number(primaryCard.pendingNfcAmount || 0) + amount;
-          await db.collection('cards').doc(primaryCardId).update({ pendingNfcAmount: pending });
-        } else {
-          const balance = Number(primaryCard.balance || 0) + amount;
-          await db.collection('cards').doc(primaryCardId).update({ balance: balance });
+      const result = await db.runTransaction(async (transaction) => {
+        const reqDoc = await transaction.get(reqRef);
+        if (!reqDoc.exists) {
+          throw new Error("NOT_FOUND");
+        }
+        const requestData = reqDoc.data();
+        if (!requestData || requestData.status !== 'pending') {
+          throw new Error("ALREADY_PROCESSED");
         }
 
-        // Write transaction
-        const txId = "tx_" + Math.random().toString(36).substr(2, 9);
-        const txObj = {
-          id: txId,
-          userId,
-          cardId: primaryCardId,
-          cardName: primaryCard.alias || "البطاقة الأساسية",
-          type: "recharge",
-          title: "شحن رصيد مقبول",
-          subtitle: primaryCard.type === 'physical' ? "معلق بانتظار تفعيل NFC" : "تم شحن الرصيد مباشرة",
-          amount,
-          timestamp: Date.now()
-        };
-        await db.collection('transactions').doc(txId).set(txObj);
-      }
+        // Update the status of recharge request inside transaction
+        transaction.update(reqRef, { status: 'approved', approvedAt: Date.now() });
 
-      res.json({ success: true });
-    } catch (err) {
+        if (primaryCardId) {
+          const cardRef = db.collection('cards').doc(primaryCardId);
+          const cardDoc = await transaction.get(cardRef);
+          if (cardDoc.exists) {
+            const cardVal = cardDoc.data();
+            const amount = Number(requestData.amount);
+            
+            if (cardVal.type === 'physical') {
+              const pending = Number(cardVal.pendingNfcAmount || 0) + amount;
+              transaction.update(cardRef, { pendingNfcAmount: pending });
+            } else {
+              const balance = Number(cardVal.balance || 0) + amount;
+              transaction.update(cardRef, { balance: balance });
+            }
+
+            // Write transaction document
+            const txId = "tx_" + Math.random().toString(36).substr(2, 9);
+            const txObj = {
+              id: txId,
+              userId,
+              cardId: primaryCardId,
+              cardName: cardVal.alias || "البطاقة الأساسية",
+              type: "recharge",
+              title: "شحن رصيد مقبول",
+              subtitle: cardVal.type === 'physical' ? "معلق بانتظار تفعيل NFC" : "تم شحن الرصيد مباشرة",
+              amount,
+              timestamp: Date.now()
+            };
+            const txRef = db.collection('transactions').doc(txId);
+            transaction.set(txRef, txObj);
+          }
+        }
+
+        return { success: true };
+      });
+
+      res.json(result);
+    } catch (err: any) {
+      console.error("Approve recharge error:", err);
+      if (err.message === "NOT_FOUND") {
+        return res.status(404).json({ message: "الطلب غير موجود" });
+      }
+      if (err.message === "ALREADY_PROCESSED") {
+        return res.status(400).json({ message: "تمت معالجة هذا الطلب مسبقاً." });
+      }
       res.status(500).json({ message: "فشل اعتماد الطلب" });
     }
   });
@@ -501,15 +562,39 @@ async function startServer() {
   app.post("/api/recharge-requests/:id/reject", requireAdmin, async (req, res) => {
     try {
       const requestId = req.params.id as string;
+      const { reason } = req.body;
+      const rejectReason = reason || "إيصال دفع غير صالح أو غير مكتمل البيانات";
+
       const reqRef = db.collection('recharge_requests').doc(requestId);
-      const reqDoc = await reqRef.get();
-      if (!reqDoc.exists) {
+
+      const result = await db.runTransaction(async (transaction) => {
+        const reqDoc = await transaction.get(reqRef);
+        if (!reqDoc.exists) {
+          throw new Error("NOT_FOUND");
+        }
+        const requestData = reqDoc.data();
+        if (!requestData || requestData.status !== 'pending') {
+          throw new Error("ALREADY_PROCESSED");
+        }
+
+        transaction.update(reqRef, { 
+          status: 'rejected', 
+          rejectionReason: rejectReason,
+          rejectedAt: Date.now() 
+        });
+
+        return { success: true };
+      });
+
+      res.json(result);
+    } catch (err: any) {
+      console.error("Reject recharge error:", err);
+      if (err.message === "NOT_FOUND") {
         return res.status(404).json({ message: "الطلب غير موجود" });
       }
-
-      await reqRef.update({ status: 'rejected' });
-      res.json({ success: true });
-    } catch (err) {
+      if (err.message === "ALREADY_PROCESSED") {
+        return res.status(400).json({ message: "تمت معالجة هذا الطلب مسبقاً." });
+      }
       res.status(500).json({ message: "فشل رفض الطلب." });
     }
   });
@@ -721,17 +806,20 @@ async function startServer() {
         return res.status(400).json({ message: "جميع المدخلات (اسم صاحب الباص، نمرة السيارة، اسم خط النقل والمسار، نوع واسطة النقل، والتعرفة) مطلوبة." });
       }
 
-      // Generate trip credentials
-      // 16-digit random code
-      const tripCode = Array.from({ length: 16 }, () => Math.floor(Math.random() * 10)).join('');
-      // 10-digit random password
-      const password = Array.from({ length: 10 }, () => Math.floor(Math.random() * 10)).join('');
+      // Generate cryptographically secure trip credentials
+      const tripCodeBytes = crypto.randomBytes(8);
+      const tripCode = Array.from(tripCodeBytes, byte => (byte % 10).toString()).join('');
+      
+      const passwordBytes = crypto.randomBytes(5);
+      const password = Array.from(passwordBytes, byte => (byte % 10).toString()).join('');
+      const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
 
       const tripId = "trip_" + Math.random().toString(36).substr(2, 9);
       const newTrip = {
         id: tripId,
         tripCode,
         password,
+        passwordHash,
         ownerName,
         plateNumber,
         routeId: "custom_" + tripId,
@@ -884,6 +972,24 @@ async function startServer() {
     }
   });
 
+  // Direct Delete Card API for Admins
+  app.delete("/api/admin/cards/:id", requireAdmin, async (req, res) => {
+    try {
+      const cardId = req.params.id as string;
+      const cardRef = db.collection('cards').doc(cardId);
+      const cardDoc = await cardRef.get();
+      if (!cardDoc.exists) {
+        return res.status(404).json({ message: "البطاقة المطلوبة غير موجودة." });
+      }
+
+      await cardRef.delete();
+      res.json({ success: true, message: "تم حذف وإلغاء البطاقة بالكامل بنجاح سحابياً." });
+    } catch (err) {
+      console.error("Direct delete error:", err);
+      res.status(500).json({ message: "فشل حذف البطاقة سحابياً." });
+    }
+  });
+
   // --- Driver Trip Authentication & Status APIs ---
   app.post("/api/driver/login", async (req, res) => {
     try {
@@ -894,7 +1000,6 @@ async function startServer() {
 
       const tripsSnap = await db.collection('bus_trips')
         .where('tripCode', '==', tripCode)
-        .where('password', '==', password)
         .get();
 
       if (tripsSnap.empty) {
@@ -902,7 +1007,20 @@ async function startServer() {
       }
 
       let matchedTrip: any = null;
-      tripsSnap.forEach(doc => { matchedTrip = doc.data(); });
+      let passwordMatched = false;
+      const inputHash = crypto.createHash('sha256').update(password).digest('hex');
+
+      tripsSnap.forEach(doc => {
+        const trip = doc.data();
+        if (trip.password === password || trip.passwordHash === inputHash) {
+          matchedTrip = trip;
+          passwordMatched = true;
+        }
+      });
+
+      if (!passwordMatched || !matchedTrip) {
+        return res.status(401).json({ message: "رمز الرحلة أو كلمة السر غير مطابقة مع السحابة." });
+      }
 
       if (matchedTrip.status !== 'active') {
         return res.status(400).json({ message: "هذه الرحلة مغلقة أو منتهية العمل مسبقاً." });
@@ -1407,6 +1525,23 @@ async function startServer() {
       const newBalance = currentBalance - ticketPrice;
       await cardRef.update({ balance: newBalance });
 
+      // Get the bus coordinates for Geofencing Audit tracking
+      let lat = 33.5110;
+      let lng = 36.2750;
+      const busDocForCoords = await db.collection('buses').doc(resolvedBusId).get();
+      if (busDocForCoords.exists) {
+        const bData = busDocForCoords.data();
+        if (bData?.location) {
+          lat = Number(bData.location.lat || lat);
+          lng = Number(bData.location.lng || lng);
+        }
+      }
+
+      // Calculate dynamic price multiplier (e.g. Peak time/hour zone multiplier)
+      const currentHour = new Date().getHours();
+      const isPeakHour = (currentHour >= 8 && currentHour <= 10) || (currentHour >= 16 && currentHour <= 18);
+      const priceMultiplier = isPeakHour ? 1.5 : 1.0;
+
       // Record transaction
       const txId = "tx_" + Math.random().toString(36).substr(2, 9);
       const txObj = {
@@ -1418,7 +1553,9 @@ async function startServer() {
         title: `باص العبور - خط ${routeCode}`,
         subtitle: busName,
         amount: -ticketPrice,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        gpsLog: { lat, lng },
+        priceMultiplier
       };
       await db.collection('transactions').doc(txId).set(txObj);
 
@@ -1431,7 +1568,9 @@ async function startServer() {
         balanceLeft: newBalance,
         passengerName: passengerName,
         status: "success",
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        gpsLog: { lat, lng },
+        priceMultiplier
       };
       await db.collection('bus_payments').doc(paymentId).set(paymentObj);
 
@@ -1492,7 +1631,7 @@ async function startServer() {
   // POST driver reverse scanning passenger signed-qr
   app.post("/api/trips/pay-signed-qr", async (req, res) => {
     try {
-      const { qrToken, busId, tripId } = req.body;
+      const { qrToken, busId, tripId, gpsLog, location_status } = req.body;
       if (!qrToken) {
         return res.status(400).json({ message: "رمز البطاقة مفقود" });
       }
@@ -1601,7 +1740,9 @@ async function startServer() {
         title: `تذكرة عبور آمنة QR - ${routeCode}`,
         subtitle: busName,
         amount: -ticketPrice,
-        timestamp: now
+        timestamp: now,
+        gpsLog,
+        location_status
       };
       await db.collection('transactions').doc(txId).set(txObj);
 
@@ -1618,7 +1759,9 @@ async function startServer() {
         balanceLeft: newBalance,
         passengerName: passengerName,
         status: "success",
-        timestamp: now
+        timestamp: now,
+        gpsLog,
+        location_status
       };
       await db.collection('bus_payments').doc(paymentId).set(paymentObj);
 
