@@ -240,9 +240,9 @@ const TransactionsHistory: React.FC<Props> = ({ transactions, onBack }) => {
                               ? 'text-rose-600'
                               : 'text-slate-800 dark:text-white'
                           }`}>
-                            {tx.amount > 0 ? '+' : ''}{tx.amount.toLocaleString()} ل.س
+                            {tx.amount > 0 ? '+' : ''}{Math.abs(tx.amount).toLocaleString()} ل.س
                           </div>
-                          <span className="text-[8px] text-slate-400 block mt-0.5 font-bold">
+                          <span className="text-[8px] text-slate-300 dark:text-slate-300 block mt-0.5 font-bold">
                             {new Date(tx.timestamp).toLocaleTimeString('ar-SY', { hour: '2-digit', minute: '2-digit' })}
                           </span>
                         </div>

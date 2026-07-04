@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Card, AppAction } from '../types';
-import { CreditCard, Plus, Trash2, AlertTriangle, XCircle, Pencil, Check, Star, Wifi } from 'lucide-react';
+import { CreditCard, Plus, Trash2, AlertTriangle, XCircle, Pencil, Check, Star, Wifi, Eye, EyeOff } from 'lucide-react';
 
 interface Props {
   cards: Card[];
@@ -14,8 +14,28 @@ interface Props {
 
 const CardList: React.FC<Props> = ({ cards, onDeleteCard, onRenameCard, onMakePrimary, dispatch, getPermission, onTriggerNfcSync }) => {
   const [cardToDelete, setCardToDelete] = React.useState<Card | null>(null);
+  const [isMasked, setIsMasked] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editAlias, setEditAlias] = useState('');
+
+  const maskCardNumber = (num: string) => {
+    if (isMasked) {
+      return num.replace(/\d{4} \d{4} \d{4} \d{4}/, (match) => {
+        const parts = match.split(' ');
+        return `${parts[0]} **** **** ${parts[3]}`;
+      });
+    }
+    return num;
+  };
+
+  const toggleMask = () => {
+    const pin = prompt("أدخل رمز PIN لإظهار رقم البطاقة");
+    if (pin === "1234") {
+      setIsMasked(!isMasked);
+    } else {
+      alert("رمز PIN غير صحيح");
+    }
+  };
 
   const isCardExpired = (expiryDate?: string) => {
     if (!expiryDate) return false;
@@ -157,8 +177,11 @@ const CardList: React.FC<Props> = ({ cards, onDeleteCard, onRenameCard, onMakePr
                             </span>
                           )}
                         </div>
-                        <p className={`text-[10px] font-bold tracking-widest mt-0.5 transition-colors ${expired ? 'text-rose-400' : 'text-slate-400 dark:text-slate-500'}`}>
-                          {card.cardNumber}
+                        <p className={`text-[10px] font-bold tracking-widest mt-0.5 transition-colors flex items-center gap-2 ${expired ? 'text-rose-400' : 'text-slate-400 dark:text-slate-500'}`}>
+                          {maskCardNumber(card.cardNumber)}
+                          <button onClick={toggleMask} className="hover:text-emerald-500 transition">
+                            {isMasked ? <Eye size={12} /> : <EyeOff size={12} />}
+                          </button>
                         </p>
                       </div>
                     </div>

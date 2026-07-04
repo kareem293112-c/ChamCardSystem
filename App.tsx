@@ -1,12 +1,22 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
-  Home, CreditCard, MapPin, User, QrCode, MessageCircle, 
+  LogOut, CreditCard, MapPin, User, QrCode, MessageCircle, 
   ArrowLeft, Wallet, Send, RefreshCw, CheckCircle2, QrCode as QrIcon,
   Search, Smartphone, Wifi, CreditCard as CardIcon, ShieldCheck,
   Zap, Camera, CameraOff, Loader2, Info, Copy, Share2, Image as ImageIcon,
   CheckCircle, XCircle, Clock, ChevronLeft, Tag, Trash, Plus, Gift
 } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
+import { Routes, Route, Outlet } from 'react-router-dom';
+
+// Enforce Lazy Loading for All 7 Profile Sub-Views
+const VerifyIdView = lazy(() => import('./components/profile/VerifyIdView'));
+const ActiveSessionsView = lazy(() => import('./components/profile/ActiveSessionsView'));
+const ChangePinView = lazy(() => import('./components/profile/ChangePinView'));
+const TopupChannelsView = lazy(() => import('./components/profile/TopupChannelsView'));
+const ComplianceView = lazy(() => import('./components/profile/ComplianceView'));
+const FaqView = lazy(() => import('./components/profile/FaqView'));
+const SupportTicketView = lazy(() => import('./components/profile/SupportTicketView'));
 import { QRCodeCanvas } from 'qrcode.react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { View, Card, AuthSession, AppAction, SystemState, RechargeRequest, Transaction } from './types';
@@ -15,7 +25,7 @@ import { rechargeService } from './services/rechargeService';
 import { useAdminIdleTimeout } from './hooks/useAdminIdleTimeout';
 
 import BalanceCard from './components/BalanceCard';
-import QuickActions from './components/QuickActions';
+import BottomNavigationBar from './components/BottomNavigationBar';
 import CardList from './components/CardList';
 
 import TransportMap from './components/TransportMap';
@@ -108,6 +118,12 @@ const App: React.FC = () => {
     root.classList.toggle('dark', isDarkMode);
     localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
   }, [isDarkMode]);
+
+  useEffect(() => {
+    if (activeView === 'profile') {
+      window.history.pushState(null, '', '/profile');
+    }
+  }, [activeView]);
 
   // Passenger/user session automatic idle timeout of 5 minutes
   useAdminIdleTimeout({
@@ -403,7 +419,24 @@ const App: React.FC = () => {
       case 'NAVIGATE_PROFILE': setActiveView('profile'); break;
       case 'NAVIGATE_ADMIN_REQUESTS': setActiveView('admin_requests'); break;
       case 'GOTO_SECURITY': setActiveView('security'); break;
-      case 'PERFORM_LOGOUT': authStore.clearSession(); setSession(null); setActiveView('home'); break;
+  const handleLogout = () => {
+    if (!navigator.onLine) {
+        alert("لا يمكن تسجيل الخروج أثناء وضع عدم الاتصال. يرجى الاتصال بالإنترنت لمزامنة البيانات.");
+        return;
+    }
+    // Check for pending offline trips
+    const pending = localStorage.getItem('pending_offline_trips');
+    if (pending && JSON.parse(pending).length > 0) {
+        alert("يوجد تذاكر عبور لم تتم مزامنتها. يرجى الانتظار حتى اكتمال المزامنة قبل تسجيل الخروج.");
+        return;
+    }
+    authStore.clearSession(); 
+    setSession(null); 
+    setActiveView('home'); 
+  };
+
+  // ... (inside the switch)
+  case 'PERFORM_LOGOUT': handleLogout(); break;
     }
   }, [system.isBusy]);
 
@@ -869,17 +902,29 @@ const App: React.FC = () => {
 
       case 'profile':
         return (
-          <div className="bg-slate-50 dark:bg-slate-950 min-h-screen animate-in fade-in pb-24" dir="rtl">
-            <Profile 
-              user={session?.user || null} 
-              dispatch={dispatchAction} 
-              getPermission={() => ({ allowed: true })} 
-              onSelectRoute={handleSelectRoute} 
-              isDarkMode={isDarkMode} 
-              onToggleDarkMode={() => setIsDarkMode(!isDarkMode)} 
-              onNotify={() => triggerToast('لا توجد إشعارات جديدة حالياً', 'success')} 
-            />
-          </div>
+          <Routes>
+            <Route path="/profile/*" element={
+              <div className="bg-slate-50 dark:bg-slate-950 min-h-screen animate-in fade-in pb-24" dir="rtl">
+                <Profile 
+                  user={session?.user || null} 
+                  dispatch={dispatchAction} 
+                  getPermission={() => ({ allowed: true })} 
+                  onSelectRoute={handleSelectRoute} 
+                  isDarkMode={isDarkMode} 
+                  onToggleDarkMode={() => setIsDarkMode(!isDarkMode)} 
+                  onNotify={() => triggerToast('لا توجد إشعارات جديدة حالياً', 'success')} 
+                />
+              </div>
+            }>
+              <Route path="verify-id" element={<Suspense fallback={<div className="text-white text-center p-4">جاري التحميل...</div>}><VerifyIdView /></Suspense>} />
+              <Route path="active-sessions" element={<Suspense fallback={<div className="text-white text-center p-4">جاري التحميل...</div>}><ActiveSessionsView /></Suspense>} />
+              <Route path="change-pin" element={<Suspense fallback={<div className="text-white text-center p-4">جاري التحميل...</div>}><ChangePinView /></Suspense>} />
+              <Route path="topup-channels" element={<Suspense fallback={<div className="text-white text-center p-4">جاري التحميل...</div>}><TopupChannelsView /></Suspense>} />
+              <Route path="compliance" element={<Suspense fallback={<div className="text-white text-center p-4">جاري التحميل...</div>}><ComplianceView /></Suspense>} />
+              <Route path="faq" element={<Suspense fallback={<div className="text-white text-center p-4">جاري التحميل...</div>}><FaqView /></Suspense>} />
+              <Route path="support-ticket" element={<Suspense fallback={<div className="text-white text-center p-4">جاري التحميل...</div>}><SupportTicketView /></Suspense>} />
+            </Route>
+          </Routes>
         );
 
       case 'security':
@@ -960,7 +1005,7 @@ const App: React.FC = () => {
              ) : null}
 
              <BalanceCard card={cards[0]} dispatch={dispatchAction} getPermission={() => ({ allowed: true })} />
-             <QuickActions dispatch={dispatchAction} getPermission={() => ({ allowed: true })} />
+
 
 
              {/* Transactions Section */}
@@ -1037,24 +1082,7 @@ const App: React.FC = () => {
         {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
         <main className="flex-1 relative overflow-y-auto no-scrollbar pt-4">{renderView()}</main>
         {['home', 'cards', 'offers', 'profile', 'qr_payment', 'transactions_history'].includes(activeView) && (
-          <div className="fixed bottom-10 left-1/2 -translate-x-1/2 w-[92%] z-[100]">
-            <nav className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-2xl p-2 rounded-[42px] shadow-xl flex justify-between items-center border border-white/40">
-              <NavTab active={activeView === 'home' || activeView === 'transactions_history'} icon={<Home />} label="الرئيسية" onClick={() => setActiveView('home')} />
-              <NavTab active={activeView === 'cards'} icon={<CreditCard />} label="محفظتي" onClick={() => setActiveView('cards')} />
-              <button 
-                onClick={() => setActiveView('qr_payment')} 
-                className={`w-16 h-16 rounded-[28px] text-white shadow-xl -mt-10 border-[4px] border-white dark:border-slate-950 flex items-center justify-center transition-all ${
-                  activeView === 'qr_payment' 
-                    ? 'bg-emerald-500 scale-110 shadow-emerald-500/40 ring-4 ring-emerald-500/20' 
-                    : 'bg-emerald-600 hover:bg-emerald-500 hover:scale-105'
-                }`}
-              >
-                <QrCode size={30} />
-              </button>
-              <NavTab active={activeView === 'offers'} icon={<Tag />} label="عروض" onClick={() => setActiveView('offers')} />
-              <NavTab active={activeView === 'profile'} icon={<User />} label="حسابي" onClick={() => setActiveView('profile')} />
-            </nav>
-          </div>
+          <BottomNavigationBar activeView={activeView} onNavigate={setActiveView} />
         )}
 
         {showInspector && (
@@ -1970,13 +1998,25 @@ const QrPaymentView: React.FC<{
         </div>
       ) : (
         <>
+          {/* Wallet balance display */}
+          <div className="bg-emerald-600/90 border border-emerald-400 p-6 rounded-[24px] mb-6 shadow-2xl flex justify-between items-center w-full">
+            <span className="text-white text-[10px] font-black uppercase tracking-wider">الرصيد المتاح</span>
+            <span className="text-white text-3xl font-black">{cards[0]?.balance.toLocaleString()} ل.س</span>
+          </div>
+
           {/* 100% REALISTIC QR SCANNER VIEWFINDER */}
           <div 
             id="qr-viewfinder-container"
             className="relative mx-auto w-80 h-80 rounded-[44px] overflow-hidden border-2 border-emerald-500/90 shadow-[0_0_50px_rgba(16,185,129,0.3)] bg-slate-950 mb-6 flex flex-col justify-center items-center group cursor-pointer"
             onClick={() => {
               if (cameraState !== 'active') {
-                startScanner();
+                navigator.mediaDevices.getUserMedia({ video: true })
+                  .then(() => startScanner())
+                  .catch((err) => {
+                    console.error("Camera permission denied", err);
+                    alert("يجب السماح بالوصول للكاميرا لاستخدام الماسح الضوئي.");
+                    startScanner();
+                  });
               }
             }}
           >

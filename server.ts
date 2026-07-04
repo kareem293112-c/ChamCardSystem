@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
+import userRoutes from './routes/userRoutes';
 
 export function generateOfflineSignature(cardId: string, userId: string, timestamp: number): string {
   const secret = 'sham_card_pro_offline_secret_2026_secure';
@@ -112,7 +113,7 @@ class CollectionReferenceWrapper extends QueryWrapper {
   }
 }
 
-const db = {
+export const db = {
   collection(path: string) {
     return new CollectionReferenceWrapper(path);
   },
@@ -1425,7 +1426,9 @@ async function startServer() {
     }
   });
 
-  // Quick QR Payment
+
+  app.use('/api/user', userRoutes);
+
   app.post("/api/trips/pay-qr", async (req, res) => {
     try {
       const { cardId, busId, tripId } = req.body;
