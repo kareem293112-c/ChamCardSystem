@@ -655,13 +655,7 @@ export const DriverDashboard: React.FC = () => {
               </div>
             )}
 
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-1.5 bg-red-950/20 hover:bg-red-900/30 border border-red-900/30 text-red-400 px-3.5 py-2 rounded-xl text-[10px] font-black transition active:scale-95"
-            >
-              <LogOut size={14} />
-              <span>إنهاء وتسجيل خروج من الرحلة</span>
-            </button>
+
           </div>
 
           {/* Secure Signed QR Processing Toast Banner */}

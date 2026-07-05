@@ -858,7 +858,7 @@ async function startServer() {
 
   app.post("/api/admin/fleet/trips/:id/stop", requireAdmin, async (req, res) => {
     try {
-      const tripId = req.params.id;
+      const tripId = req.params.id as string;
       const tripRef = db.collection('bus_trips').doc(tripId);
       const tripDoc = await tripRef.get();
       if (!tripDoc.exists) {
@@ -873,7 +873,7 @@ async function startServer() {
 
   app.delete("/api/admin/fleet/trips/:id", requireAdmin, async (req, res) => {
     try {
-      const tripId = req.params.id;
+      const tripId = req.params.id as string;
       const tripRef = db.collection('bus_trips').doc(tripId);
       const tripDoc = await tripRef.get();
       if (!tripDoc.exists) {
