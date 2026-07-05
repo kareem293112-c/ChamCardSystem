@@ -508,40 +508,44 @@ async function startServer() {
           throw new Error("ALREADY_PROCESSED");
         }
 
-        // Update the status of recharge request inside transaction
-        transaction.update(reqRef, { status: 'approved', approvedAt: Date.now() });
-
+        // Perform any additional reads (such as fetching the card document) BEFORE any writes
+        let cardDoc = null;
         if (primaryCardId) {
           const cardRef = db.collection('cards').doc(primaryCardId);
-          const cardDoc = await transaction.get(cardRef);
-          if (cardDoc.exists) {
-            const cardVal = cardDoc.data();
-            const amount = Number(requestData.amount);
-            
-            if (cardVal.type === 'physical') {
-              const pending = Number(cardVal.pendingNfcAmount || 0) + amount;
-              transaction.update(cardRef, { pendingNfcAmount: pending });
-            } else {
-              const balance = Number(cardVal.balance || 0) + amount;
-              transaction.update(cardRef, { balance: balance });
-            }
+          cardDoc = await transaction.get(cardRef);
+        }
 
-            // Write transaction document
-            const txId = "tx_" + Math.random().toString(36).substr(2, 9);
-            const txObj = {
-              id: txId,
-              userId,
-              cardId: primaryCardId,
-              cardName: cardVal.alias || "البطاقة الأساسية",
-              type: "recharge",
-              title: "شحن رصيد مقبول",
-              subtitle: cardVal.type === 'physical' ? "معلق بانتظار تفعيل NFC" : "تم شحن الرصيد مباشرة",
-              amount,
-              timestamp: Date.now()
-            };
-            const txRef = db.collection('transactions').doc(txId);
-            transaction.set(txRef, txObj);
+        // Now that all reads are completed, perform all updates/writes
+        transaction.update(reqRef, { status: 'approved', approvedAt: Date.now() });
+
+        if (cardDoc && cardDoc.exists) {
+          const cardRef = db.collection('cards').doc(primaryCardId);
+          const cardVal = cardDoc.data();
+          const amount = Number(requestData.amount);
+          
+          if (cardVal.type === 'physical') {
+            const pending = Number(cardVal.pendingNfcAmount || 0) + amount;
+            transaction.update(cardRef, { pendingNfcAmount: pending });
+          } else {
+            const balance = Number(cardVal.balance || 0) + amount;
+            transaction.update(cardRef, { balance: balance });
           }
+
+          // Write transaction document
+          const txId = "tx_" + Math.random().toString(36).substr(2, 9);
+          const txObj = {
+            id: txId,
+            userId,
+            cardId: primaryCardId,
+            cardName: cardVal.alias || "البطاقة الأساسية",
+            type: "recharge",
+            title: "شحن رصيد مقبول",
+            subtitle: cardVal.type === 'physical' ? "معلق بانتظار تفعيل NFC" : "تم شحن الرصيد مباشرة",
+            amount,
+            timestamp: Date.now()
+          };
+          const txRef = db.collection('transactions').doc(txId);
+          transaction.set(txRef, txObj);
         }
 
         return { success: true };

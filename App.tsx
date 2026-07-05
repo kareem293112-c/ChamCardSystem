@@ -7,7 +7,7 @@ import {
   CheckCircle, XCircle, Clock, ChevronLeft, Tag, Trash, Plus, Gift
 } from 'lucide-react';
 import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
-import { Routes, Route, Outlet } from 'react-router-dom';
+import { Routes, Route, Outlet, useNavigate, useLocation } from 'react-router-dom';
 
 // Enforce Lazy Loading for All 7 Profile Sub-Views
 const VerifyIdView = lazy(() => import('./components/profile/VerifyIdView'));
@@ -57,6 +57,8 @@ export function generateOfflineSignature(cardId: string, userId: string, timesta
 }
 
 const App: React.FC = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [session, setSession] = useState<AuthSession | null>(() => authStore.getSession());
   const [activeView, setActiveView] = useState<View>(() => {
     try {
@@ -120,8 +122,29 @@ const App: React.FC = () => {
   }, [isDarkMode]);
 
   useEffect(() => {
+    // Scroll to the absolute top of the page on route/view changes
+    window.scrollTo({ top: 0, behavior: 'instant' });
+
+    if (location.pathname.startsWith('/profile')) {
+      if (activeView !== 'profile') {
+        setActiveView('profile');
+      }
+    } else if (location.pathname === '/' || location.pathname === '') {
+      if (activeView === 'profile') {
+        setActiveView('home');
+      }
+    }
+  }, [location.pathname]);
+
+  useEffect(() => {
     if (activeView === 'profile') {
-      window.history.pushState(null, '', '/profile');
+      if (!location.pathname.startsWith('/profile')) {
+        navigate('/profile');
+      }
+    } else {
+      if (location.pathname.startsWith('/profile')) {
+        navigate('/');
+      }
     }
   }, [activeView]);
 

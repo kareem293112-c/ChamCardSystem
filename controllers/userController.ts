@@ -47,7 +47,9 @@ export const changePin = async (req: Request, res: Response) => {
 export const submitTicket = async (req: Request, res: Response) => {
   try {
     const { userId, type, message } = req.body;
-    await db.collection('support_tickets').add({
+    const ticketId = "ticket_" + Math.random().toString(36).substr(2, 9);
+    await db.collection('support_tickets').doc(ticketId).set({
+      id: ticketId,
       userId,
       type,
       message,
