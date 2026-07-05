@@ -856,6 +856,36 @@ async function startServer() {
     }
   });
 
+  app.post("/api/admin/fleet/trips/:id/stop", requireAdmin, async (req, res) => {
+    try {
+      const tripId = req.params.id;
+      const tripRef = db.collection('bus_trips').doc(tripId);
+      const tripDoc = await tripRef.get();
+      if (!tripDoc.exists) {
+        return res.status(404).json({ message: "الرحلة غير موجودة." });
+      }
+      await tripRef.update({ status: 'completed' });
+      res.json({ success: true, message: "تم إيقاف وإنهاء الرحلة بنجاح." });
+    } catch (err) {
+      res.status(500).json({ message: "فشل إيقاف الرحلة سحابياً." });
+    }
+  });
+
+  app.delete("/api/admin/fleet/trips/:id", requireAdmin, async (req, res) => {
+    try {
+      const tripId = req.params.id;
+      const tripRef = db.collection('bus_trips').doc(tripId);
+      const tripDoc = await tripRef.get();
+      if (!tripDoc.exists) {
+        return res.status(404).json({ message: "الرحلة غير موجودة." });
+      }
+      await tripRef.delete();
+      res.json({ success: true, message: "تم حذف وإلغاء الرحلة بالكامل بنجاح سحابياً." });
+    } catch (err) {
+      res.status(500).json({ message: "فشل حذف الرحلة سحابياً." });
+    }
+  });
+
   // --- Admin Card Action APIs ---
   app.post("/api/admin/cards/create", requireAdmin, async (req, res) => {
     try {

@@ -551,6 +551,58 @@ export default function AdminApp() {
     }
   };
 
+  // Stop Bus Trip
+  const handleStopTrip = async (tripId: string) => {
+    if (!window.confirm("هل أنت متأكد من رغبتك في إيقاف وإنهاء هذه الرحلة مسبقاً من النظام؟")) {
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch(`/api/admin/fleet/trips/${tripId}/stop`, {
+        method: 'POST',
+        headers: getHeaders()
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        triggerToast(data.message || "تم إيقاف وإنهاء الرحلة بنجاح.", "success");
+        loadAdminData();
+      } else {
+        triggerToast("فشل إيقاف الرحلة.", "error");
+      }
+    } catch (err) {
+      triggerToast("خطأ أثناء الاتصال بالخادم الرئيسي.", "error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // Delete Bus Trip
+  const handleDeleteTrip = async (tripId: string) => {
+    if (!window.confirm("هل أنت متأكد من رغبتك في حذف وإلغاء هذه الرحلة نهائياً من السحاب؟ لا يمكن التراجع عن هذا الإجراء.")) {
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch(`/api/admin/fleet/trips/${tripId}`, {
+        method: 'DELETE',
+        headers: getHeaders()
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        triggerToast(data.message || "تم حذف الرحلة بنجاح.", "success");
+        loadAdminData();
+      } else {
+        triggerToast("فشل حذف الرحلة.", "error");
+      }
+    } catch (err) {
+      triggerToast("خطأ أثناء الاتصال بالخادم الرئيسي.", "error");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   // Approve Request
   const handleApprove = async (id: string) => {
     if (submitting) return;
@@ -1862,12 +1914,13 @@ export default function AdminApp() {
                           <th className="p-4">كلمة السر للرحلة</th>
                           <th className="p-4">تاريخ التوليد</th>
                           <th className="p-4">الحالة</th>
+                          <th className="p-4 text-center">الإجراءات</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-900 bg-slate-950/25">
                         {trips.length === 0 ? (
                           <tr>
-                            <td colSpan={6} className="p-12 text-center text-slate-500">
+                            <td colSpan={7} className="p-12 text-center text-slate-500">
                               لا توجد أي رحلات حافلات مولدة مسبقاً بالنظام السحابي.
                             </td>
                           </tr>
@@ -1894,6 +1947,28 @@ export default function AdminApp() {
                                 }`}>
                                   {t.status === 'completed' ? 'منتهية ومغلقة' : 'نشطة وتبث حالياً'}
                                 </span>
+                              </td>
+                              <td className="p-4 text-center">
+                                <div className="flex items-center justify-center gap-1.5">
+                                  {t.status !== 'completed' && (
+                                    <button
+                                      onClick={() => handleStopTrip(t.id)}
+                                      title="إيقاف الرحلة"
+                                      className="bg-amber-500/10 hover:bg-amber-500/25 text-amber-400 p-1.5 rounded-lg border border-amber-500/20 transition flex items-center gap-1 text-[10px] font-bold"
+                                    >
+                                      <X size={12} />
+                                      <span>إيقاف</span>
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => handleDeleteTrip(t.id)}
+                                    title="حذف الرحلة"
+                                    className="bg-red-500/10 hover:bg-red-500/25 text-red-400 p-1.5 rounded-lg border border-red-500/20 transition flex items-center gap-1 text-[10px] font-bold"
+                                  >
+                                    <Trash2 size={12} />
+                                    <span>حذف</span>
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           ))
