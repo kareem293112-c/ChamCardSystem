@@ -17,6 +17,7 @@ const TopupChannelsView = lazy(() => import('./components/profile/TopupChannelsV
 const ComplianceView = lazy(() => import('./components/profile/ComplianceView'));
 const FaqView = lazy(() => import('./components/profile/FaqView'));
 const SupportTicketView = lazy(() => import('./components/profile/SupportTicketView'));
+const AccountInfoView = lazy(() => import('./components/profile/AccountInfoView'));
 import { QRCodeCanvas } from 'qrcode.react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { View, Card, AuthSession, AppAction, SystemState, RechargeRequest, Transaction } from './types';
@@ -941,6 +942,7 @@ const App: React.FC = () => {
               </div>
             }>
               <Route path="verify-id" element={<Suspense fallback={<div className="text-white text-center p-4">جاري التحميل...</div>}><VerifyIdView /></Suspense>} />
+              <Route path="account-info" element={<Suspense fallback={<div className="text-white text-center p-4">جاري التحميل...</div>}><AccountInfoView /></Suspense>} />
               <Route path="active-sessions" element={<Suspense fallback={<div className="text-white text-center p-4">جاري التحميل...</div>}><ActiveSessionsView /></Suspense>} />
               <Route path="change-pin" element={<Suspense fallback={<div className="text-white text-center p-4">جاري التحميل...</div>}><ChangePinView /></Suspense>} />
               <Route path="topup-channels" element={<Suspense fallback={<div className="text-white text-center p-4">جاري التحميل...</div>}><TopupChannelsView /></Suspense>} />

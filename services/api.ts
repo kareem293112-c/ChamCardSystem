@@ -56,5 +56,23 @@ export const apiService = {
       throw new Error(errorData.message || 'فشل التسجيل. قد يكون الرقم مستخدماً مسبقاً.');
     }
     return res.json();
+  },
+
+  async resetPassword(phone: string, password: string): Promise<{ success: boolean, message: string }> {
+    if (!PHONE_REGEX.test(phone)) {
+      throw new Error('رقم الهاتف يجب أن يكون بالتنسيق الدولي +963...');
+    }
+
+    const res = await fetch(`${BASE_URL}/api/v1/auth/reset-password`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ phone, password })
+    });
+
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || 'فشل إعادة تعيين كلمة المرور.');
+    }
+    return res.json();
   }
 };

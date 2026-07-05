@@ -42,6 +42,13 @@ const Auth: React.FC<Props> = ({ onLogin }) => {
 
     setLoading(true);
     try {
+      if (view === 'forgot') {
+        const res = await apiService.resetPassword(formData.phone, formData.password);
+        alert(res.message);
+        setView('login');
+        return;
+      }
+
       let session: AuthSession;
       if (view === 'login') {
         session = await apiService.login(formData.phone, formData.password);
@@ -78,7 +85,7 @@ const Auth: React.FC<Props> = ({ onLogin }) => {
 
         <div className="bg-white dark:bg-slate-900 p-8 rounded-[40px] shadow-xl border border-slate-100 dark:border-slate-800">
           <h2 className="text-xl font-black text-slate-800 dark:text-white mb-6">
-            {view === 'login' ? 'مرحباً بك مجدداً' : 'إنشاء حساب جديد'}
+            {view === 'login' ? 'مرحباً بك مجدداً' : view === 'signup' ? 'إنشاء حساب جديد' : 'إعادة تعيين كلمة المرور'}
           </h2>
 
           <form onSubmit={handleAction} className="space-y-4">
@@ -111,17 +118,29 @@ const Auth: React.FC<Props> = ({ onLogin }) => {
               <Lock className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-emerald-500 transition-colors" size={18} />
               <input 
                 type="password" 
-                placeholder="كلمة المرور"
+                placeholder={view === 'forgot' ? "كلمة المرور الجديدة" : "كلمة المرور"}
                 required
                 className="w-full bg-slate-50 dark:bg-slate-800 border-none rounded-2xl p-4 pr-12 text-sm font-bold outline-none ring-2 ring-transparent focus:ring-emerald-500 dark:text-white text-right"
                 onChange={e => setFormData({...formData, password: e.target.value})}
               />
             </div>
 
+            {view === 'login' && (
+              <div className="flex justify-start">
+                <button 
+                  type="button" 
+                  onClick={() => { setError(null); setView('forgot'); }} 
+                  className="text-xs font-bold text-slate-500 hover:text-emerald-600 transition"
+                >
+                  نسيت كلمة المرور؟
+                </button>
+              </div>
+            )}
+
             <button 
               disabled={loading}
               className="w-full bg-emerald-600 text-white font-black py-5 rounded-[24px] shadow-lg shadow-emerald-200 dark:shadow-none active:scale-95 transition-all flex items-center justify-center gap-3 disabled:opacity-50">
-              {loading ? <Loader2 className="animate-spin" /> : (view === 'login' ? 'دخول آمن' : 'تسجيل')}
+              {loading ? <Loader2 className="animate-spin" /> : (view === 'login' ? 'دخول آمن' : view === 'signup' ? 'تسجيل' : 'تحديث كلمة المرور')}
             </button>
           </form>
         </div>
@@ -130,10 +149,10 @@ const Auth: React.FC<Props> = ({ onLogin }) => {
           {view === 'login' ? (
             <p className="text-sm font-bold text-slate-500">
               ليس لديك حساب؟ 
-              <button onClick={() => setView('signup')} className="text-emerald-600 font-black mr-2 hover:underline">سجل الآن</button>
+              <button onClick={() => { setError(null); setView('signup'); }} className="text-emerald-600 font-black mr-2 hover:underline">سجل الآن</button>
             </p>
           ) : (
-            <button onClick={() => setView('login')} className="text-sm font-black text-emerald-600 flex items-center gap-2 mx-auto hover:opacity-80">
+            <button onClick={() => { setError(null); setView('login'); }} className="text-sm font-black text-emerald-600 flex items-center gap-2 mx-auto hover:opacity-80">
               <ArrowLeft size={16} /> العودة للدخول
             </button>
           )}

@@ -1182,6 +1182,28 @@ async function startServer() {
     }
   });
 
+  // Auth Reset Password
+  app.post("/api/v1/auth/reset-password", async (req, res) => {
+    try {
+      const { phone, password } = req.body;
+      if (!phone || !password) {
+        return res.status(400).json({ message: "يرجى إدخال رقم الهاتف وكلمة المرور الجديدة." });
+      }
+
+      const userDocRef = db.collection('users').doc(phone);
+      const userDoc = await userDocRef.get();
+      if (!userDoc.exists) {
+        return res.status(404).json({ message: "رقم الهاتف غير مسجل في النظام." });
+      }
+
+      await userDocRef.update({ password });
+      res.json({ success: true, message: "تم تغيير كلمة المرور بنجاح. يمكنك تسجيل الدخول الآن." });
+    } catch (err: any) {
+      console.error("Reset Password Error:", err);
+      res.status(500).json({ message: "فشل إعادة تعيين كلمة المرور. يرجى المحاولة لاحقاً." });
+    }
+  });
+
   // Dashboard Unified Fetch
   app.get("/api/dashboard", async (req, res) => {
     try {

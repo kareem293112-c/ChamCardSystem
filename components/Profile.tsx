@@ -4,7 +4,7 @@ import { useNavigate, Outlet, useLocation } from 'react-router-dom';
 import { 
   LogOut, ChevronLeft, ShieldCheck, 
   Shield, Bell, HelpCircle, Heart, MapPin, Bus, Navigation, TrainFront, Bike, Footprints, X, Check, MapPinned, Moon, Sun,
-  Smartphone, Key, Info, MessageCircle, CreditCard, Loader2
+  Smartphone, Key, Info, MessageCircle, CreditCard, Loader2, User
 } from 'lucide-react';
 import { UserData, SavedRoute, AppAction } from '../types';
 
@@ -87,6 +87,7 @@ const Profile: React.FC<Props> = ({ user, dispatch, getPermission, onSelectRoute
 
             {/* القائمة الجديدة */}
             <div className="bg-white dark:bg-slate-900 rounded-[32px] shadow-sm border border-slate-100 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800">
+              <MenuLink onClick={() => navigate('/profile/account-info')} icon={<User />} label="معلومات الحساب والتسجيل" sub="الاسم، الرقم والتفاصيل" />
               <MenuLink onClick={() => navigate('/profile/verify-id')} icon={<ShieldCheck />} label="توثيق الحساب الوطني" sub="تأكيد الهوية" />
               <MenuLink onClick={() => navigate('/profile/active-sessions')} icon={<Smartphone />} label="سجل الأجهزة النشطة" sub="الأجهزة المتصلة" />
               <MenuLink onClick={() => navigate('/profile/change-pin')} icon={<Key />} label="تغيير رمز المرور" sub="تأمين الحساب" />
