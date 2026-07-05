@@ -416,6 +416,22 @@ const App: React.FC = () => {
 
   const triggerToast = (message: string, type: 'success' | 'error') => setToast({ message, type });
 
+  const handleLogout = useCallback(() => {
+    if (!navigator.onLine) {
+        alert("لا يمكن تسجيل الخروج أثناء وضع عدم الاتصال. يرجى الاتصال بالإنترنت لمزامنة البيانات.");
+        return;
+    }
+    // Check for pending offline trips
+    const pending = localStorage.getItem('pending_offline_trips');
+    if (pending && JSON.parse(pending).length > 0) {
+        alert("يوجد تذاكر عبور لم تتم مزامنتها. يرجى الانتظار حتى اكتمال المزامنة قبل تسجيل الخروج.");
+        return;
+    }
+    authStore.clearSession(); 
+    setSession(null); 
+    setActiveView('home'); 
+  }, []);
+
   const dispatchAction = useCallback(async (action: AppAction) => {
     if (system.isBusy) return;
     switch (action) {
@@ -442,26 +458,11 @@ const App: React.FC = () => {
       case 'NAVIGATE_PROFILE': setActiveView('profile'); break;
       case 'NAVIGATE_ADMIN_REQUESTS': setActiveView('admin_requests'); break;
       case 'GOTO_SECURITY': setActiveView('security'); break;
-  const handleLogout = () => {
-    if (!navigator.onLine) {
-        alert("لا يمكن تسجيل الخروج أثناء وضع عدم الاتصال. يرجى الاتصال بالإنترنت لمزامنة البيانات.");
-        return;
+      case 'PERFORM_LOGOUT': 
+        handleLogout(); 
+        break;
     }
-    // Check for pending offline trips
-    const pending = localStorage.getItem('pending_offline_trips');
-    if (pending && JSON.parse(pending).length > 0) {
-        alert("يوجد تذاكر عبور لم تتم مزامنتها. يرجى الانتظار حتى اكتمال المزامنة قبل تسجيل الخروج.");
-        return;
-    }
-    authStore.clearSession(); 
-    setSession(null); 
-    setActiveView('home'); 
-  };
-
-  // ... (inside the switch)
-  case 'PERFORM_LOGOUT': handleLogout(); break;
-    }
-  }, [system.isBusy]);
+  }, [system.isBusy, handleLogout]);
 
 
 

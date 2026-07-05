@@ -354,6 +354,14 @@ export default function AdminApp() {
     return false;
   };
 
+  // Helper for matching phone numbers robustly across different space-formatting and symbols (like +)
+  const matchPhoneNumber = (userId: string, query: string): boolean => {
+    if (!userId || !query) return false;
+    const cleanUser = userId.replace(/[\s+]+/g, '').toLowerCase().trim();
+    const cleanQuery = query.replace(/[\s+]+/g, '').toLowerCase().trim();
+    return cleanUser.includes(cleanQuery) || cleanQuery.includes(cleanUser);
+  };
+
   // Search for Card directly in state
   const handleSearchCard = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -365,7 +373,7 @@ export default function AdminApp() {
     const matched = cards.find(c => 
       matchCardNumber(c.cardNumber, searchCardQuery) || 
       c.alias.toLowerCase().includes(query) ||
-      (c.userId && c.userId.toLowerCase().includes(query))
+      (c.userId && matchPhoneNumber(c.userId, searchCardQuery))
     );
 
     if (matched) {
@@ -902,7 +910,8 @@ export default function AdminApp() {
     if (!searchQuery) return true;
     const query = searchQuery.toLowerCase();
     return matchCardNumber(card.cardNumber, searchQuery) || 
-           card.alias.toLowerCase().includes(query);
+           card.alias.toLowerCase().includes(query) ||
+           (card.userId && matchPhoneNumber(card.userId, searchQuery));
   });
 
   // Reconciliation calculations
