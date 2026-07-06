@@ -1,5 +1,5 @@
 // ChamCard PRO - High-Fidelity Offline-First Service Worker
-const CACHE_NAME = 'chamcard-pro-v2';
+const CACHE_NAME = 'chamcard-pro-v3';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
